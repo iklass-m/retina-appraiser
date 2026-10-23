@@ -36,7 +36,12 @@ function show(v){
   if(isList(v)){lastList=v;renderList()}
   if(v==="find"){lastList="find";renderResults()}
   window.scrollTo(0,0);
+  saveState();
 }
+/* Phones reload the page after the screen goes off: remember where she was so it comes back. */
+let manualArticle=null,restoring=false;
+function saveState(){if(restoring)return;store.set("state",{view,lastList,openId,manual:view==="manual"&&manualArticle?{...manualArticle,fullText:""}:null,
+  fq:$("#fq").value,preset,ftype:$("#ftype").value,fdate:$("#fdate").value,fsort:$("#fsort").value,fjournals:$("#fjournals").checked,q:$("#q").value,topic:$("#topic").value,vfilter,at:Date.now()})}
 $("#t-find").onclick=()=>{show("find");if(!searched)runSearch()};
 $("#t-library").onclick=()=>show("library");
 $("#t-uveitis").onclick=()=>show("uveitis");
@@ -81,7 +86,7 @@ function links(p){const out=[];
   const s=el("span");out.forEach((a,i)=>{if(i)s.append(" · ");s.append(a)});return s}
 const ENGINE={gemini:"Gemini",claude:"Claude",manual:"you (no AI)"};
 function openPaper(id){
-  const p=papers.find(x=>x.id===id);if(!p)return;openId=id;
+  const p=papers.find(x=>x.id===id);if(!p)return;openId=id;manualArticle=null;
   if(!p.read)patch(id,{read:true});
   const v=$("#v-detail");v.replaceChildren();
   const l=String(p.level||"?"),c=p.counselling||{},script=c.script||"";
@@ -179,7 +184,7 @@ async function getText(u){const r=await fetch(u);if(!r.ok)throw new Error("HTTP 
 
 async function runSearch(more=false){
   searched=true;
-  const q=buildQuery();
+  const q=buildQuery();saveState();
   if(!more){resStart=0;results=[];lastQuery=q;renderResults(true)}
   $("#fcount").textContent="Searching PubMed…";$("#morewrap").hidden=true;
   const p=new URLSearchParams({db:"pubmed",retmode:"json",retmax:"20",retstart:String(resStart),sort:$("#fsort").value==="relevance"?"relevance":"pub_date",term:q,tool:"retina-appraiser"});
@@ -388,8 +393,12 @@ async function aiAppraise({article,body,source,images,onProgress}){
   return savePaper(doc);
 }
 let queue=Promise.resolve();
+/* an appraisal in progress is noted on the device, so a reload can offer to resume it */
+const pendingAll=()=>store.get("pending",{});
+function setPending(a,on){const p=pendingAll();if(on)p[a.pmid]={a:{...a,fullText:""},at:Date.now()};else delete p[a.pmid];store.set("pending",p)}
 function queueAI(a){
   if(!gKey()){toast("Add a free Gemini key in Settings to use AI appraise. Or tap Appraise myself.");show("settings");return}
+  setPending(a,true);
   setBusy(a.pmid,"Queued…");
   queue=queue.then(async()=>{
     await holdAwake(true);
@@ -399,12 +408,13 @@ function queueAI(a){
       const ft=await fetchFullText(a);
       if(ft){body="ABSTRACT:\n"+a.abstract+"\n\nFULL TEXT:\n"+ft;source="full text"}
       else if(a.abstract)body="ABSTRACT:\n"+a.abstract;
-      else{setBusy(a.pmid);errs[a.pmid]="No abstract or free full text for this paper on PubMed. Upload the PDF instead (bottom of this page).";renderResults();return}
+      else{setPending(a,false);setBusy(a.pmid);errs[a.pmid]="No abstract or free full text for this paper on PubMed. Upload the PDF instead (bottom of this page).";renderResults();return}
       const id=await aiAppraise({article:a,body,source,onProgress:t=>setBusy(a.pmid,t)});
-      setBusy(a.pmid);toast("Appraised — tap Open appraisal");
-      if(view==="find")renderResults();
+      setPending(a,false);setBusy(a.pmid);
+      /* show the finished appraisal straight away unless she has moved on or more are queued */
+      if(view==="find"&&!Object.keys(busy).length)openPaper(id);else{toast("Appraised — tap Open appraisal");if(view==="find")renderResults()}
       return id;
-    }catch(e){setBusy(a.pmid);errs[a.pmid]="Not appraised: "+(e instanceof GeminiError?e.message:(e.message||"unknown error"));if(view==="find")renderResults();else toast(errs[a.pmid])}
+    }catch(e){setPending(a,false);setBusy(a.pmid);errs[a.pmid]="Not appraised: "+(e instanceof GeminiError?e.message:(e.message||"unknown error"));if(view==="find")renderResults();else toast(errs[a.pmid])}
     finally{await holdAwake(false)}
   });
 }
@@ -547,15 +557,19 @@ async function startManual(a){
   openManual(a,null);
 }
 function openManual(a,existing){
+  /* unsaved answers survive a reload: a draft is kept per paper until it is saved */
+  manualArticle=a;
+  const draftKey="draft:"+(a.pmid||a.title||"paper");
+  const init=existing||store.get(draftKey,null);
   lastList=view==="detail"?lastList:view==="find"?"find":lastList;
   const v=$("#v-manual");v.replaceChildren();
   const text=[a.abstract,a.fullText].filter(Boolean).join("\n\n");
-  const [dkey,dwhy]=existing?.designKey?[existing.designKey,"your earlier choice"]:detectDesign(a,text);
+  const [dkey,dwhy]=init?.designKey?[init.designKey,"your earlier choice"]:detectDesign(a,text);
   /* size/follow-up from the abstract when it has them (full text also quotes other studies) */
   const fa=detectFacts(a.abstract||""),ff=detectFacts(text);
   const facts={f:[...new Set([...fa.f,...ff.f.filter(x=>!(/^(Size|Follow-up):/.test(x)&&fa.f.some(y=>y.startsWith(x.split(":")[0]))))])],w:[...new Set([...fa.w,...ff.w])]};
   const regRelevant=()=>st.design==="rct"||st.design==="sr";
-  const st={design:dkey,answers:existing?.answers?{...existing.answers}:{},notes:existing?.notes?{...existing.notes}:{}};
+  const st={design:dkey,answers:init?.answers?{...init.answers}:{},notes:init?.notes?{...init.notes}:{}};
 
   // paper text
   const paperBox=el("div",{class:"paper"});
@@ -565,8 +579,8 @@ function openManual(a,existing){
 
   // design + checklist
   const dsel=el("select",{id:"m-design"},Object.entries(DESIGNS).map(([k,d])=>el("option",{value:k,text:d.name,selected:k===st.design})));
-  const lvl=el("select",{id:"m-level"},["1","2","3","4","5"].map(n=>el("option",{value:n,text:n+" — "+LEVELS[n],selected:n===String(existing?.level||DESIGNS[st.design].level)})));
-  const grade=el("select",{id:"m-grade"},["High","Moderate","Low","Very low"].map(g=>el("option",{value:g,text:g,selected:g===(existing?.grade||"Low")})));
+  const lvl=el("select",{id:"m-level"},["1","2","3","4","5"].map(n=>el("option",{value:n,text:n+" — "+LEVELS[n],selected:n===String(init?.level||DESIGNS[st.design].level)})));
+  const grade=el("select",{id:"m-grade"},["High","Moderate","Low","Very low"].map(g=>el("option",{value:g,text:g,selected:g===(init?.grade||"Low")})));
   const qbox=el("div",{class:"sec"});
   const hintFor=domain=>{const ws=facts.w.join(" ")+" "+facts.f.join(" ");
     return ({Masking:/Double-masked/.test(ws)?"Text says double-masked":/Open-label/.test(ws)?"Text says open-label":"",Conflicts:/industry/.test(ws)?"Possible industry involvement found":"",Outcome:/Post hoc/.test(ws)?"Post hoc analysis mentioned":/surrogate/.test(ws)?"Imaging/surrogate outcome mentioned":"",Protocol:/CRD\d/.test(ws)?"PROSPERO number found":"",Selection:/Retrospective/.test(ws)?"Retrospective design":"",Randomisation:/randomi[sz]/i.test(text)?"Text mentions randomisation":""})[domain]||""};
@@ -586,9 +600,9 @@ function openManual(a,existing){
 
   // write-up fields
   const ta=(id,ph,val,rows)=>el("textarea",{id,placeholder:ph,rows:rows||3},val||"");
-  const fBottom=ta("m-bottom","In one or two sentences: what did it find, and how much should we trust it?",existing?.bottomLine);
-  const fSummary=ta("m-summary","Short summary (question, design, main result).",existing?.summary,4);
-  const numsBox=el("div",{class:"sec"});const nums=arr(existing?.keyResults).map(r=>({...r}));
+  const fBottom=ta("m-bottom","In one or two sentences: what did it find, and how much should we trust it?",init?.bottomLine);
+  const fSummary=ta("m-summary","Short summary (question, design, main result).",init?.summary,4);
+  const numsBox=el("div",{class:"sec"});const nums=arr(init?.keyResults).map(r=>({...r}));
   function drawNums(){numsBox.replaceChildren(el("span",{class:"lab",text:"Key numbers"}));
     nums.forEach((r,i)=>numsBox.append(el("div",{class:"numrow"},el("input",{type:"text",placeholder:"What",value:r.label,oninput:e=>r.label=e.target.value}),el("input",{type:"text",placeholder:"Result",value:r.value,oninput:e=>r.value=e.target.value}),el("button",{type:"button","aria-label":"Remove",onclick:()=>{nums.splice(i,1);drawNums()}},"×"))));
     numsBox.append(el("div",{class:"actions"},el("button",{class:"btn ghost",type:"button",onclick:()=>{nums.push({label:"",value:""});drawNums()}},"+ Add a number")));
@@ -596,13 +610,13 @@ function openManual(a,existing){
     if(cands.length)numsBox.append(el("span",{class:"note",text:"Tap a result sentence from the paper to add it:"}),el("div",{class:"cand"},cands.map(s=>el("button",{type:"button",onclick:()=>{const m=s.match(/(95%\s*CI.*|[Pp]\s*[<=].*|\b(?:HR|OR|RR|AUC)\b.*)$/);nums.push({label:s.slice(0,m?m.index:s.length).replace(/[,(]\s*$/,"").trim().slice(0,140),value:m?m[0].replace(/[).;]+$/,"").slice(0,80):""});drawNums()}},highlight(s)))));
   }
   drawNums();
-  const fAdds=ta("m-adds","What it adds — one point per line",lines(existing?.adds?.join("\n")).join("\n"));
-  const fLacks=ta("m-lacks","What it lacks — one point per line (tap Fill from checklist)",arr(existing?.lacks).join("\n"),4);
-  const fPractice=ta("m-practice","How I'd use it in clinic — one point per line",arr(existing?.practice).join("\n"));
-  const fScript=ta("m-script","What to tell patients, in plain words (tap Draft from my answers)",existing?.counselling?.script,5);
-  const topic=el("select",{id:"m-topic"},TOPICS.map(t=>el("option",{value:t,text:t,selected:t===(existing?.topic||(preset==="uveitis"?"Uveitis":preset==="ird"?"Inherited retinal disease":"Other retina"))})));
-  const verdict=el("select",{id:"m-verdict"},Object.entries(VERDICTS).map(([k,l])=>el("option",{value:k,text:l,selected:k===(existing?.verdict||"know")})));
-  const fWhy=el("input",{type:"text",id:"m-why",placeholder:"Why? (one line)",value:existing?.verdictWhy||""});
+  const fAdds=ta("m-adds","What it adds — one point per line",lines(init?.adds?.join("\n")).join("\n"));
+  const fLacks=ta("m-lacks","What it lacks — one point per line (tap Fill from checklist)",arr(init?.lacks).join("\n"),4);
+  const fPractice=ta("m-practice","How I'd use it in clinic — one point per line",arr(init?.practice).join("\n"));
+  const fScript=ta("m-script","What to tell patients, in plain words (tap Draft from my answers)",init?.counselling?.script,5);
+  const topic=el("select",{id:"m-topic"},TOPICS.map(t=>el("option",{value:t,text:t,selected:t===(init?.topic||(preset==="uveitis"?"Uveitis":preset==="ird"?"Inherited retinal disease":"Other retina"))})));
+  const verdict=el("select",{id:"m-verdict"},Object.entries(VERDICTS).map(([k,l])=>el("option",{value:k,text:l,selected:k===(init?.verdict||"know")})));
+  const fWhy=el("input",{type:"text",id:"m-why",placeholder:"Why? (one line)",value:init?.verdictWhy||""});
 
   const fillLacks=()=>{const out=lines(fLacks.value);
     DESIGNS[st.design].qs.forEach(([d,q,lack],i)=>{const a=st.answers[st.design+":"+i],note=st.notes[st.design+":"+i];if(a==="n"||a==="u"){const line=(a==="u"?"Unclear: ":"")+lack+(note?" — "+note:"");if(!out.includes(line))out.push(line)}});
@@ -628,8 +642,10 @@ function openManual(a,existing){
       answers:st.answers,notes:st.notes,engine:"manual",source:a.fullText?"full text":"abstract",
       pubTypes:a.pubTypes||[],abstractText:a.abstract||"",abstractParts:a.abstractParts||null,sourceText:text.slice(0,80000),
       addedAt:existing?.addedAt||Date.now(),read:true,starred:!!existing?.starred};
-    const id=await savePaper(doc);toast("Saved to your library");openPaper(id);
+    const id=await savePaper(doc);store.set(draftKey,null);toast("Saved to your library");openPaper(id);
   };
+  const saveDraft=()=>{if(view!=="manual")return;store.set(draftKey,{designKey:st.design,answers:st.answers,notes:st.notes,level:lvl.value,grade:grade.value,bottomLine:fBottom.value,summary:fSummary.value,keyResults:nums,adds:lines(fAdds.value),lacks:lines(fLacks.value),practice:lines(fPractice.value),counselling:{script:fScript.value},topic:topic.value,verdict:verdict.value,verdictWhy:fWhy.value})};
+  let draftTimer;v.oninput=v.onchange=v.onclick=()=>{clearTimeout(draftTimer);draftTimer=setTimeout(saveDraft,400)};
 
   v.append(el("button",{class:"back",onclick:()=>existing?openPaper(existing.id):show(lastList)},"← Back"),
     el("article",{class:"sheet"},
@@ -707,6 +723,36 @@ $("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;
     await reload();$("#libstatus").textContent=`Imported: ${added} new, ${updated} updated.`}
   catch{$("#libstatus").textContent="That file isn't a Retina Appraiser library."}finally{e.target.value=""}};
 
+/* ---------- coming back after a reload ---------- */
+function restoreState(){
+  const s=store.get("state",null);
+  if(!s||Date.now()-(s.at||0)>7*864e5){show("find");runSearch();return}
+  restoring=true;
+  $("#fq").value=s.fq||"";preset=s.preset??"retina";
+  if(s.ftype!=null)$("#ftype").value=s.ftype;if(s.fdate!=null)$("#fdate").value=s.fdate;if(s.fsort)$("#fsort").value=s.fsort;
+  $("#fjournals").checked=s.fjournals!==false;$("#q").value=s.q||"";$("#topic").value=s.topic||"";vfilter=s.vfilter||"";
+  markPresets();renderChips();
+  restoring=false;
+  lastList=s.lastList||"find";
+  if(lastList==="find"||s.view==="find")runSearch();else searched=false;
+  if(s.view==="detail"&&papers.some(p=>p.id===s.openId))openPaper(s.openId);
+  else if(s.view==="manual"&&s.manual)startManual(s.manual);
+  else if(["find","library","uveitis","starred","settings"].includes(s.view))show(s.view);
+  else show("find");
+}
+function renderPending(){
+  const box=$("#pending");box.replaceChildren();
+  const p=pendingAll(),now=Date.now();
+  for(const[pmid,{a,at}]of Object.entries(p)){
+    if(now-at>6*3600e3||busy[pmid]||papers.some(x=>String(x.pmid)===String(pmid))){setPending({pmid},false);continue}
+    box.append(el("div",{class:"banner",role:"status"},
+      el("div",{},"Interrupted before it finished (the screen went off or the app was closed): ",el("b",{text:a.title||"PMID "+pmid})),
+      el("div",{class:"actions"},
+        el("button",{class:"btn",type:"button",onclick:()=>{queueAI(a);renderPending()}},"Resume AI appraisal"),
+        el("button",{class:"btn ghost",type:"button",onclick:()=>{setPending({pmid},false);renderPending()}},"Dismiss"))));
+  }
+}
+
 /* ---------- boot ---------- */
 (async()=>{
   try{idb=await openDB()}catch{toast("This browser blocked local storage, so the library can't be saved.")}
@@ -718,6 +764,7 @@ $("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;
   }
   renderList();
   if(gKey())modelOrder().then(fillModels).catch(()=>{});
-  show("find");runSearch();
+  restoreState();
+  renderPending();
   if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();

@@ -1,5 +1,5 @@
 // Offline shell: the app opens without internet (library works); searching and AI still need a connection.
-const CACHE = "retina-appraiser-v3";
+const CACHE = "retina-appraiser-v4";
 const SHELL = ["./", "index.html", "app.js", "manifest.webmanifest", "seeds.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
