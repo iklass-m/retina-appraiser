@@ -59,10 +59,16 @@ function renderList(){
   if(q)rows=rows.filter(p=>JSON.stringify([p.title,p.journal,p.bottomLine,p.summary,p.intervention,p.topic,p.authors]).toLowerCase().includes(q));
   $("#count").textContent=`${rows.length} paper${rows.length===1?"":"s"}`;
   if(!rows.length){list.append(el("div",{class:"empty"},el("h3",{text:view==="uveitis"?"No uveitis papers yet":view==="starred"?"No starred papers yet":papers.length?"Nothing matches":"Your library is empty"}),el("p",{text:view==="starred"?"Tap ☆ Star on any appraisal to keep it here.":papers.length&&(q||vfilter||tp)?"Clear the search or filters.":"Find a paper and tap AI appraise or Appraise myself."})));return}
-  for(const p of rows)list.append(el("button",{class:"card"+(p.read?"":" unread"),onclick:()=>openPaper(p.id)},levelSeal(p),el("div",{class:"body"},
-    el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p),p.starred?el("span",{class:"star",text:"★"}):null),
+  for(const p of rows)list.append(el("div",{class:"card"+(p.read?"":" unread"),role:"button",tabindex:"0",onclick:()=>openPaper(p.id),onkeydown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openPaper(p.id)}}},levelSeal(p),el("div",{class:"body"},
+    el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p)),
     el("h3",{text:p.title||"Untitled"}),el("div",{class:"meta",text:[p.authors,p.journal,p.year].filter(Boolean).join(" · ")}),
-    p.bottomLine?el("p",{class:"bl",text:p.bottomLine}):null)));
+    p.bottomLine?el("p",{class:"bl",text:p.bottomLine}):null),starButton(p,renderList)));
+}
+/* one star control used on cards, results and the appraisal sheet */
+function starButton(p,after){
+  const b=el("button",{class:"starbtn",type:"button","aria-pressed":String(!!p.starred),"aria-label":p.starred?"Remove star":"Star this paper",title:p.starred?"Starred — tap to remove":"Star this paper"},p.starred?"★":"☆");
+  b.onclick=async e=>{e.stopPropagation();await patch(p.id,{starred:!p.starred});toast(p.starred?"Starred — find it in the Starred tab":"Star removed");if(after)after();else{b.textContent=p.starred?"★":"☆";b.setAttribute("aria-pressed",String(!!p.starred))}};
+  return b;
 }
 
 /* ---------- appraisal sheet ---------- */
@@ -81,9 +87,8 @@ function openPaper(id){
   const l=String(p.level||"?"),c=p.counselling||{},script=c.script||"";
   const bq=el("blockquote",{text:script||"No counselling script."});
   const copyBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{try{await navigator.clipboard.writeText(script);toast("Copied")}catch{const r=document.createRange();r.selectNodeContents(bq);const s=getSelection();s.removeAllRanges();s.addRange(r);toast("Selected — copy it from the menu")}}},"Copy what to say");
-  const starBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{await patch(id,{starred:!p.starred});starBtn.textContent=p.starred?"★ Starred":"☆ Star"}},p.starred?"★ Starred":"☆ Star");
   const delBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{if(delBtn.dataset.sure){await dbDel(id);await reload();toast("Removed from library");show(lastList==="find"?"library":lastList)}else{delBtn.dataset.sure="1";delBtn.textContent="Tap again to remove"}}},"Remove");
-  v.append(el("button",{class:"back",onclick:()=>show(lastList)},lastList==="find"?"← Back to search":"← Back to library"),
+  v.append(el("div",{class:"topbar"},el("button",{class:"back",onclick:()=>show(lastList)},lastList==="find"?"← Back to search":"← Back to library"),starButton(p)),
     el("article",{class:"sheet"},
       el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p),p.source?el("span",{class:"pill type",text:"from "+p.source}):null),
       el("h2",{text:p.title}),
@@ -104,8 +109,9 @@ function openPaper(id){
         arr(c.ifTheyAsk).length?el("div",{class:"qa"},el("div",{class:"note",text:"If they ask…"}),arr(c.ifTheyAsk).map(x=>el("details",{},el("summary",{text:x.q}),el("p",{text:x.a})))):null),
       p.verdictWhy||p.verdict?sec("Verdict",el("p",{},el("b",{text:(VERDICTS[p.verdict]||"")+". "}),p.verdictWhy||"")):null,
       askBox(p),
-      el("div",{class:"actions"},starBtn,
+      el("div",{class:"actions"},
         el("button",{class:"btn ghost",type:"button",onclick:()=>{patch(id,{read:false});toast("Marked unread")}},"Mark unread"),
+        p.pmid?el("a",{class:"btn ghost",href:CLAUDE_APP+"#pm"+p.pmid,target:"_blank",rel:"noopener"},"Appraise with Claude ↗"):null,
         el("button",{class:"btn ghost",type:"button",onclick:()=>openManual(paperAsArticle(p),p)},p.engine==="manual"?"Edit my appraisal":"Appraise it myself"),
         delBtn),
       el("p",{class:"note",text:"Appraised by "+(ENGINE[p.engine]||"Claude")+" from the "+(p.source||"text")+" on "+(p.addedAt?new Date(p.addedAt).toLocaleDateString("en-GB"):"—")+(p.engine==="manual"?".":". Check key numbers against the paper before quoting.")})));
@@ -245,19 +251,26 @@ function renderResults(loading){
     const done=have.get(a.pmid);
     const abs=el("p",{class:"abs",text:a.abstract||"No abstract on PubMed."});
     const act=el("div",{class:"actions"});
-    if(done)act.append(el("button",{class:"btn ghost",type:"button",onclick:()=>openPaper(done.id)},"Open appraisal"),el("span",{class:"pill done",text:"✓ in library"}));
-    else if(busy[a.pmid])act.append(el("span",{class:"prog",text:busy[a.pmid]}));
-    else act.append(el("button",{class:"btn",type:"button",onclick:()=>queueAI(a)},"AI appraise"),el("button",{class:"btn ghost",type:"button",onclick:()=>startManual(a)},"Appraise myself"));
+    if(done)act.append(el("button",{class:"btn ghost",type:"button",onclick:()=>openPaper(done.id)},"Open appraisal"),starButton(done,renderResults),el("span",{class:"pill done",text:"✓ in library"}));
+    else if(busy[a.pmid])act.append(el("span",{class:"prog","data-pmid":a.pmid,text:busyLabel(a.pmid)}));
+    else act.append(el("button",{class:"btn",type:"button",onclick:()=>queueAI(a)},"AI appraise"),el("button",{class:"btn ghost",type:"button",onclick:()=>startManual(a)},"Appraise myself"),
+      el("a",{class:"btn ghost",href:CLAUDE_APP+"#pm"+a.pmid,target:"_blank",rel:"noopener",title:"Opens your Claude version at this paper (needs a Claude subscription)"},"Claude ↗"));
     act.append(el("a",{class:"linkbtn",href:"https://pubmed.ncbi.nlm.nih.gov/"+a.pmid+"/",target:"_blank",rel:"noopener",text:"PubMed"}));
     if(a.pmc)act.append(el("a",{class:"linkbtn",href:"https://pmc.ncbi.nlm.nih.gov/articles/"+a.pmc+"/",target:"_blank",rel:"noopener",text:"Full text"}));
     box.append(el("article",{class:"res"},
       el("div",{class:"row"},el("span",{class:"pill type",text:shownType(a)}),a.pmc?el("span",{class:"pill free",text:"free full text"}):null),
       el("h3",{text:a.title||"Untitled"}),
       el("div",{class:"meta",text:[a.authorShort,a.journalAbbr||a.journal,pubDate(a)].filter(Boolean).join(" · ")}),
-      abs,el("button",{class:"linkbtn",type:"button",onclick:e=>{abs.classList.toggle("open");e.target.textContent=abs.classList.contains("open")?"Less":"Read abstract"}},"Read abstract"),act));
+      abs,el("button",{class:"linkbtn",type:"button",onclick:e=>{abs.classList.toggle("open");e.target.textContent=abs.classList.contains("open")?"Less":"Read abstract"}},"Read abstract"),act,
+      errs[a.pmid]?el("p",{class:"err",role:"alert",text:errs[a.pmid]}):null));
   }
 }
-function setBusy(id,text){if(text)busy[id]=text;else delete busy[id];if(view==="find")renderResults()}
+/* busy state per paper, with a running clock so a slow answer never looks like nothing happening */
+const busyStart={},errs={};
+const CLAUDE_APP="https://claude.ai/artifact/C9FtH4aSh5uGPQ7F2yF5UU";
+function busyLabel(id){const s=busyStart[id]?Math.round((Date.now()-busyStart[id])/1000):0;return busy[id]+(s>2?" "+s+"s":"")}
+function setBusy(id,text){if(text){busy[id]=text;busyStart[id]=busyStart[id]||Date.now();delete errs[id]}else{delete busy[id];delete busyStart[id]}if(view==="find")renderResults()}
+setInterval(()=>{for(const n of document.querySelectorAll(".prog[data-pmid]"))if(busy[n.dataset.pmid])n.textContent=busyLabel(n.dataset.pmid)},1000);
 
 /* ---------- Gemini ---------- */
 const GAPI="https://generativelanguage.googleapis.com/v1beta/";
@@ -270,7 +283,8 @@ async function listModels(key){
   const ok=arr(j.models).filter(m=>arr(m.supportedGenerationMethods).includes("generateContent")).map(m=>m.name.replace(/^models\//,""))
     .filter(n=>/^gemini-/.test(n)&&/flash/.test(n)&&!/(image|tts|audio|live|embedding|exp|vision|thinking)/.test(n));
   const ver=n=>{const m=n.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0};
-  const score=n=>ver(n)*100-(/lite/.test(n)?50:0)-(/preview/.test(n)?5:0)-(/-\d{3,}$|latest$/.test(n)?1:0);
+  /* stable before preview: previews are often slower, gated or withdrawn */
+  const score=n=>ver(n)*100-(/lite/.test(n)?50:0)-(/preview/.test(n)?120:0)-(/-\d{3,}$|latest$/.test(n)?1:0);
   return ok.sort((a,b)=>score(b)-score(a));
 }
 async function modelOrder(){
@@ -285,24 +299,36 @@ async function gemini(prompt,json,images){
   const key=gKey();if(!key)throw new GeminiError("Add a free Gemini key in Settings first.");
   const parts=[{text:prompt}];
   for(const img of arr(images))parts.push({inline_data:{mime_type:img.type||"image/jpeg",data:await blobToB64(img)}});
-  const body={contents:[{role:"user",parts}],generationConfig:{temperature:0.2,maxOutputTokens:8192,...(json?{responseMimeType:"application/json"}:{})}};
-  let last="";
-  for(const model of await modelOrder()){
-    const r=await fetch(GAPI+"models/"+model+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body)});
-    const j=await r.json().catch(()=>({}));
+  /* thinking models spend output tokens on reasoning first, so leave plenty of room */
+  const body={contents:[{role:"user",parts}],generationConfig:{temperature:0.2,maxOutputTokens:32768,...(json?{responseMimeType:"application/json"}:{})}};
+  const models=await modelOrder();
+  if(!models.length)throw new GeminiError("No Gemini model is available for this key. Tap Test Gemini in Settings.");
+  let last="",lastStatus=0;
+  for(const model of models){
+    let r,j;
+    try{
+      const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),180000);
+      try{r=await fetch(GAPI+"models/"+model+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal:ctl.signal})}
+      finally{clearTimeout(timer)}
+      j=await r.json().catch(()=>({}));
+    }catch(e){
+      if(e.name==="AbortError")throw new GeminiError("Gemini took over 3 minutes and was stopped. Try again — or use Appraise myself.");
+      throw new GeminiError("Couldn't reach Gemini. Check your internet connection.");
+    }
     if(r.ok){
       const cand=j.candidates?.[0];
       const text=arr(cand?.content?.parts).filter(p=>!p.thought&&p.text).map(p=>p.text).join("");
-      if(!text)throw new GeminiError(cand?.finishReason==="SAFETY"?"Gemini declined this text.":"Gemini returned an empty answer. Try again.");
+      if(cand?.finishReason==="MAX_TOKENS")throw new GeminiError("Gemini's answer was cut off before it finished. Tap AI appraise again.");
+      if(!text)throw new GeminiError(cand?.finishReason==="SAFETY"||j.promptFeedback?.blockReason?"Gemini declined this text ("+(j.promptFeedback?.blockReason||"safety")+").":"Gemini returned an empty answer ("+(cand?.finishReason||"no reason given")+"). Try again.");
       store.set("lastModel",model);
       return text;
     }
-    last=j.error?.message||("HTTP "+r.status);
+    last=j.error?.message||("HTTP "+r.status);lastStatus=r.status;
     if(r.status===400&&/API key/i.test(last))throw new GeminiError("Your Gemini key isn't valid. Check it in Settings.");
-    if(r.status===403)throw new GeminiError("Gemini refused the key (permission). Create a new key in Google AI Studio.");
+    if(r.status===403)throw new GeminiError("Google refused the key: "+last);
     if(![404,429,500,503].includes(r.status))break;   // otherwise try the next model
   }
-  if(/quota|exhausted|rate/i.test(last))throw new GeminiError("You've reached Gemini's free limit for now (it resets daily). Use Appraise myself, or try later.");
+  if(lastStatus===429)throw new GeminiError(/per.?day|daily|PerDay/i.test(last)?"You've used today's free Gemini allowance. It resets tomorrow — use Appraise myself until then.":"Gemini's free tier is busy or you've hit the per-minute limit. Wait a minute and tap AI appraise again.");
   throw new GeminiError("Gemini couldn't answer: "+last);
 }
 function blobToB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=rej;r.readAsDataURL(b)})}
@@ -332,8 +358,9 @@ Reply with ONLY one JSON object of this exact shape:
 
 async function aiAppraise({article,body,source,images,onProgress}){
   const meta=article?`PubMed record: PMID ${article.pmid}${article.pmc?", "+article.pmc:""}; journal ${article.journal}; published ${pubDate(article)}; publication types: ${article.pubTypes.join(", ")}; MeSH: ${article.mesh.slice(0,15).join(", ")}. Source supplied: ${source}.`:`Source supplied: ${source}.`;
-  onProgress?.("Appraising with Gemini…");
-  const text=await gemini(APPRAISE+"\n\n"+meta+(images?.length?`\n\nThe attached ${images.length} image(s) are photos of the paper's pages.`:"")+(body?"\n\nPAPER TEXT:\n"+body.slice(0,400000):""),true,images);
+  onProgress?.(source==="full text"?"Gemini is reading the full paper…":"Gemini is reading the abstract…");
+  /* ~150k characters keeps a long paper well inside the free tier's per-minute token allowance */
+  const text=await gemini(APPRAISE+"\n\n"+meta+(images?.length?`\n\nThe attached ${images.length} image(s) are photos of the paper's pages.`:"")+(body?"\n\nPAPER TEXT:\n"+body.slice(0,150000):""),true,images);
   const a=parseJSON(text);
   if(!a||!a.title)throw new GeminiError("Gemini's answer wasn't in the expected format. Tap AI appraise again.");
   const doc={...a,level:String(a.level||"").replace(/\D/g,"").slice(0,1)||"?",engine:"gemini",model:store.get("lastModel",""),source,addedAt:Date.now(),read:false,starred:false,sourceText:(body||"").slice(0,80000)};
@@ -352,12 +379,12 @@ function queueAI(a){
       const ft=await fetchFullText(a);
       if(ft){body="ABSTRACT:\n"+a.abstract+"\n\nFULL TEXT:\n"+ft;source="full text"}
       else if(a.abstract)body="ABSTRACT:\n"+a.abstract;
-      else{setBusy(a.pmid);toast("No abstract or free full text for this paper. Upload the PDF instead.");return}
+      else{setBusy(a.pmid);errs[a.pmid]="No abstract or free full text for this paper on PubMed. Upload the PDF instead (bottom of this page).";renderResults();return}
       const id=await aiAppraise({article:a,body,source,onProgress:t=>setBusy(a.pmid,t)});
-      setBusy(a.pmid);toast("Appraised: "+(a.title||"").slice(0,60)+"…");
+      setBusy(a.pmid);toast("Appraised — tap Open appraisal");
       if(view==="find")renderResults();
       return id;
-    }catch(e){setBusy(a.pmid);toast(e instanceof GeminiError?e.message:"Couldn't appraise that paper: "+(e.message||"error"))}
+    }catch(e){setBusy(a.pmid);errs[a.pmid]="Not appraised: "+(e instanceof GeminiError?e.message:(e.message||"unknown error"));if(view==="find")renderResults();else toast(errs[a.pmid])}
   });
 }
 
@@ -639,6 +666,12 @@ $("#savekey").onclick=async()=>{const k=$("#gkey").value.trim();if(!k){$("#keyst
   $("#keystatus").textContent="Testing…";
   try{const ms=await listModels(k);store.set("gkey",k);modelCache=ms;fillModels();$("#keystatus").textContent=ms.length?"Key works. It will use "+ms[0]+".":"Key works, but no Flash model was listed — try again later."}
   catch(e){$("#keystatus").textContent="That key didn't work: "+(e.message||"error")}};
+$("#testai").onclick=async()=>{
+  const out=$("#teststatus");if(!gKey()){out.textContent="Save a key first.";return}
+  out.textContent="Asking Gemini a tiny question…";const t0=Date.now();
+  try{const t=await gemini('Reply with only this JSON: {"ok": true, "answer": "the capital of France"}',true);
+    const j=parseJSON(t);out.textContent=(j?.ok?"Gemini works":"Gemini answered, but oddly: "+t.slice(0,120))+" — model "+store.get("lastModel","?")+", "+((Date.now()-t0)/1000).toFixed(1)+"s."}
+  catch(e){out.textContent="Gemini problem: "+(e.message||e)}};
 $("#clearkey").onclick=()=>{store.set("gkey","");store.set("gmodel","");modelCache=null;$("#gkey").value="";fillModels();$("#keystatus").textContent="Key removed from this device."};
 $("#export").onclick=()=>{const data=JSON.stringify({app:"retina-appraiser",version:1,exportedAt:new Date().toISOString(),papers},null,1);
   const a=el("a",{href:URL.createObjectURL(new Blob([data],{type:"application/json"})),download:"retina-library-"+new Date().toISOString().slice(0,10)+".json"});document.body.append(a);a.click();a.remove();

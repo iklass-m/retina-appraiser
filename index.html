@@ -68,7 +68,10 @@ main .wrap{padding-block:16px 48px}
 .tog{display:flex;gap:6px;align-items:center;font-size:.85rem;color:var(--muted)}
 
 .list{display:flex;flex-direction:column;gap:10px}
-.card{display:grid;grid-template-columns:auto 1fr;gap:12px;text-align:left;width:100%;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:14px}
+.card{display:grid;grid-template-columns:auto 1fr auto;gap:12px;text-align:left;width:100%;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:14px;cursor:pointer}
+.starbtn{border:0;background:none;color:var(--rust);font-size:1.5rem;line-height:1;padding:2px 4px;align-self:start;min-width:36px;min-height:36px}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.err{margin:0;font-size:.84rem;color:var(--bad);background:var(--bad-soft);border-radius:6px;padding:8px 10px}
 .card:hover{border-color:var(--navy)}
 .card .body{min-width:0;display:flex;flex-direction:column;gap:6px}
 .card h3,.res h3{font:600 1rem/1.3 var(--read);margin:0;text-wrap:balance}
@@ -291,7 +294,14 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
       <div class="actions"><button class="btn" type="button" id="savekey">Save and test</button><button class="btn ghost" type="button" id="clearkey">Remove key</button></div>
       <div class="status" id="keystatus" aria-live="polite"></div>
       <div class="field"><label for="gmodel">Model</label><select id="gmodel"><option value="">Automatic (newest free Flash)</option></select></div>
+      <div class="actions"><button class="btn ghost" type="button" id="testai">Test Gemini</button></div>
+      <div class="status" id="teststatus" aria-live="polite"></div>
       <p class="note">Your key stays in this browser only. Google's free tier has a daily limit and Google may use free-tier requests to improve its products, so only send published papers, never patient details.</p>
+    </div>
+    <div class="form">
+      <h2>Claude (with a subscription)</h2>
+      <p class="guide">Every paper has a <b>Claude ↗</b> button. It opens your Claude version of this app at that paper, where <b>Appraise</b> uses your Claude subscription. Use Export / Import below to bring those appraisals back here.</p>
+      <p class="guide"><a href="https://claude.ai/artifact/C9FtH4aSh5uGPQ7F2yF5UU" target="_blank" rel="noopener">Open the Claude version</a></p>
     </div>
     <div class="form">
       <h2>Your library</h2>
