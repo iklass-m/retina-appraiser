@@ -304,17 +304,21 @@ async function gemini(prompt,json,images){
   const models=await modelOrder();
   if(!models.length)throw new GeminiError("No Gemini model is available for this key. Tap Test Gemini in Settings.");
   let last="",lastStatus=0;
+  const call=async model=>{
+    const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),180000);
+    try{const r=await fetch(GAPI+"models/"+model+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal:ctl.signal});return[r,await r.json().catch(()=>({}))]}
+    finally{clearTimeout(timer)}
+  };
   for(const model of models){
-    let r,j;
+    let r,j,hidden=false;
+    const onVis=()=>{if(document.hidden)hidden=true};document.addEventListener("visibilitychange",onVis);
     try{
-      const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),180000);
-      try{r=await fetch(GAPI+"models/"+model+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal:ctl.signal})}
-      finally{clearTimeout(timer)}
-      j=await r.json().catch(()=>({}));
+      try{[r,j]=await call(model)}
+      catch(e){if(e.name==="AbortError")throw e;await new Promise(res=>setTimeout(res,2000));[r,j]=await call(model)}   // one automatic retry on a dropped connection
     }catch(e){
       if(e.name==="AbortError")throw new GeminiError("Gemini took over 3 minutes and was stopped. Try again — or use Appraise myself.");
-      throw new GeminiError("Couldn't reach Gemini. Check your internet connection.");
-    }
+      throw new GeminiError(await diagnoseNetwork(key,hidden,e));
+    }finally{document.removeEventListener("visibilitychange",onVis)}
     if(r.ok){
       const cand=j.candidates?.[0];
       const text=arr(cand?.content?.parts).filter(p=>!p.thought&&p.text).map(p=>p.text).join("");
@@ -331,6 +335,21 @@ async function gemini(prompt,json,images){
   if(lastStatus===429)throw new GeminiError(/per.?day|daily|PerDay/i.test(last)?"You've used today's free Gemini allowance. It resets tomorrow — use Appraise myself until then.":"Gemini's free tier is busy or you've hit the per-minute limit. Wait a minute and tap AI appraise again.");
   throw new GeminiError("Gemini couldn't answer: "+last);
 }
+/* when a request dies before Google answers, work out why and say it plainly */
+async function diagnoseNetwork(key,wentHidden,err){
+  const raw=" (technical detail: "+(err?.name||"Error")+" — "+(err?.message||"no message")+")";
+  if(!navigator.onLine)return "Your device is offline. Reconnect and tap AI appraise again.";
+  if(wentHidden)return "The connection to Gemini was cut because the app went into the background or the screen switched off. Keep the app open on screen until the appraisal appears, then try again."+raw;
+  let googleOK=false,pubmedOK=false;
+  try{const r=await fetch(GAPI+"models?pageSize=1",{headers:{"x-goog-api-key":key},cache:"no-store"});googleOK=r.status>0}catch{}
+  try{const r=await fetch(EU+"einfo.fcgi?retmode=json",{cache:"no-store"});pubmedOK=r.ok}catch{}
+  if(!googleOK&&pubmedOK)return "This network is blocking Google's Gemini service (generativelanguage.googleapis.com), although PubMed works. Hospital/NHS Wi-Fi often blocks AI services. Switch to mobile data or home Wi-Fi and tap AI appraise again — or use Appraise myself / Claude ↗."+raw;
+  if(!googleOK)return "Your device can't reach Google's Gemini service right now. Try another network (mobile data or home Wi-Fi)."+raw;
+  return "Gemini is reachable, but the appraisal request was dropped on the way. Keep the app open on screen and tap AI appraise again. If it keeps happening, try Settings → Test Gemini and send me what it says."+raw;
+}
+/* keep the phone screen on while Gemini writes (Android cuts background connections) */
+let wakeLock=null;
+async function holdAwake(on){try{if(on&&!wakeLock&&navigator.wakeLock)wakeLock=await navigator.wakeLock.request("screen");else if(!on&&wakeLock){await wakeLock.release();wakeLock=null}}catch{wakeLock=null}}
 function blobToB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=rej;r.readAsDataURL(b)})}
 function parseJSON(t){try{return JSON.parse(t)}catch{}const f=t.match(/```(?:json)?\s*([\s\S]*?)```/);if(f)try{return JSON.parse(f[1])}catch{}const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch{}return null}
 
@@ -373,6 +392,7 @@ function queueAI(a){
   if(!gKey()){toast("Add a free Gemini key in Settings to use AI appraise. Or tap Appraise myself.");show("settings");return}
   setBusy(a.pmid,"Queued…");
   queue=queue.then(async()=>{
+    await holdAwake(true);
     try{
       setBusy(a.pmid,a.pmc?"Fetching full text…":"Reading abstract…");
       let body="",source="abstract";
@@ -385,6 +405,7 @@ function queueAI(a){
       if(view==="find")renderResults();
       return id;
     }catch(e){setBusy(a.pmid);errs[a.pmid]="Not appraised: "+(e instanceof GeminiError?e.message:(e.message||"unknown error"));if(view==="find")renderResults();else toast(errs[a.pmid])}
+    finally{await holdAwake(false)}
   });
 }
 
@@ -651,10 +672,10 @@ $("#newform").onsubmit=async e=>{e.preventDefault();
   const body=(pdfText||$("#text").value.trim()),photos=$("#photos").files;
   if(!body&&!photos.length){$("#status").textContent="Add a PDF, photos, or paste some text first.";return}
   if(!gKey()){$("#status").textContent="AI appraise needs a free Gemini key (Settings). Or tap Appraise myself.";return}
-  $("#go").disabled=true;
+  $("#go").disabled=true;await holdAwake(true);
   try{const id=await aiAppraise({article:null,body,source:pdfText?"full text (PDF)":photos.length?"photos":"pasted text",images:photos.length?[...photos]:null,onProgress:t=>$("#status").textContent=t});
     $("#newform").reset();pdfText="";$("#status").textContent="";toast("Saved to your library");openPaper(id)}
-  catch(err){$("#status").textContent=err.message||"Couldn't appraise that."}finally{$("#go").disabled=false}};
+  catch(err){$("#status").textContent=err.message||"Couldn't appraise that."}finally{$("#go").disabled=false;await holdAwake(false)}};
 $("#goManual").onclick=()=>{const body=(pdfText||$("#text").value.trim());if(!body){$("#status").textContent="Upload a PDF or paste the text first.";return}openManual(uploadedArticle(),null)};
 
 /* ---------- settings ---------- */
@@ -668,7 +689,10 @@ $("#savekey").onclick=async()=>{const k=$("#gkey").value.trim();if(!k){$("#keyst
   catch(e){$("#keystatus").textContent="That key didn't work: "+(e.message||"error")}};
 $("#testai").onclick=async()=>{
   const out=$("#teststatus");if(!gKey()){out.textContent="Save a key first.";return}
-  out.textContent="Asking Gemini a tiny question…";const t0=Date.now();
+  out.textContent="Checking the connection to Google…";const t0=Date.now();
+  try{await fetch(GAPI+"models?pageSize=1",{headers:{"x-goog-api-key":gKey()},cache:"no-store"})}
+  catch(e){out.textContent=await diagnoseNetwork(gKey(),false,e);return}
+  out.textContent="Connection fine. Asking Gemini a tiny question…";
   try{const t=await gemini('Reply with only this JSON: {"ok": true, "answer": "the capital of France"}',true);
     const j=parseJSON(t);out.textContent=(j?.ok?"Gemini works":"Gemini answered, but oddly: "+t.slice(0,120))+" — model "+store.get("lastModel","?")+", "+((Date.now()-t0)/1000).toFixed(1)+"s."}
   catch(e){out.textContent="Gemini problem: "+(e.message||e)}};
