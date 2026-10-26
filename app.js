@@ -139,43 +139,66 @@ function checklistSec(p){const c=checklistRows(p);if(!c)return null;
       el("span",{},el("b",{text:r.domain+": "}),ANS[r.a]||"Not answered",r.note?" — "+r.note:""))))))}
 
 /* ---------- export one appraisal as plain text or Markdown (for Notion, handouts) ---------- */
+/* A self-contained journal-club handout: everything on the appraisal page plus the abstract and the full checklist
+   (questions, answers, notes), so even a quick "Appraise myself" appraisal exports as a useful document. */
 function appraisalText(p,md){
-  const out=[],h=t=>out.push("",md?"## "+t:t.toUpperCase(),md?"":"-".repeat(t.length)),li=x=>out.push((md?"- ":"• ")+x),
-    link=(label,url)=>md?`[${label}](${url})`:`${label}: ${url}`,c=p.counselling||{},l=String(p.level||"?");
-  out.push(md?"# "+(p.title||"Untitled"):(p.title||"Untitled"));
-  out.push([p.authors,p.journal,p.year].filter(Boolean).join(" · "));
+  const out=[],h=t=>out.push("",md?"## "+t:t.toUpperCase(),md?"":"=".repeat(t.length)),li=x=>out.push((md?"- ":"• ")+x),para=x=>{if(x)out.push("",x)},
+    bold=x=>md?"**"+x+"**":x,link=(label,url)=>md?`[${label}](${url})`:`${label}: ${url}`,c=p.counselling||{},l=String(p.level||"?"),c2=checklistRows(p);
+  out.push(md?"# "+(p.title||"Untitled"):(p.title||"Untitled").toUpperCase());
+  para([p.authors,p.journal,p.year].filter(Boolean).join(" · ")+(p.pmid?" · PMID "+p.pmid:"")+(p.doi?" · doi:"+p.doi:""));
   const ls=[p.pmid&&link("PubMed",pubmedURL(p.pmid)),p.pmc&&link("Free full text (PMC)",pmcURL(p.pmc)),p.doi&&link("Journal",`https://doi.org/${p.doi}`)].filter(Boolean);
-  if(ls.length)out.push(ls.join(md?" · ":"\n"));
-  if(p.bottomLine){h("Bottom line");out.push(p.bottomLine)}
-  h("Evidence");li(`Oxford CEBM level ${l} — ${LEVELS[l]||"unclassified"}`);if(p.levelWhy)li(p.levelWhy);if(p.grade)li("GRADE certainty: "+p.grade+(p.gradeWhy?" — "+p.gradeWhy:""));
-  const facts=[["Design",p.design],["Population",p.population],["Patients / eyes",p.n],["Follow-up",p.followUp],["Intervention",p.intervention],["Comparator",p.comparator],["Primary outcome",p.primaryOutcome],["Funding",p.funding]].filter(x=>x[1]);
-  if(facts.length||p.summary){h("Summary");for(const[k,v]of facts)li((md?`**${k}:** `:k+": ")+v);if(p.summary)out.push("",p.summary)}
-  if(arr(p.keyResults).length){h("Key numbers");for(const r of arr(p.keyResults))li(`${r.label}: ${r.value}`)}
+  if(ls.length)out.push(...(md?[ls.join(" · ")]:ls));
+  h("At a glance");
+  li(bold("Does this change my practice?")+" "+(VERDICTS[p.verdict]||"No verdict yet"));
+  li(bold("Evidence level:")+" "+`Oxford CEBM ${l} — ${LEVELS[l]||"unclassified"}`);
+  if(p.grade)li(bold("GRADE certainty:")+" "+p.grade);
+  if(c2)li(bold(c2.ov.label+":")+" "+c2.ov.value);
+  if(p.design)li(bold("Design:")+" "+p.design);
+  if(p.bottomLine){h("Bottom line");out.push("",md?"> "+p.bottomLine:p.bottomLine)}
+  const facts=[["Population",p.population],["Patients / eyes",p.n],["Follow-up",p.followUp],["Intervention",p.intervention],["Comparator",p.comparator],["Primary outcome",p.primaryOutcome],["Funding",p.funding],["Publication type",arr(p.pubTypes).filter(t=>!/^Journal Article$/.test(t)).join(", ")]].filter(x=>x[1]);
+  if(facts.length||p.summary){h("The study");for(const[k,v]of facts)li(bold(k+":")+" "+v);para(p.summary)}
+  if(arr(p.spotted).length){h("Spotted in the text");arr(p.spotted).forEach(li)}
+  if(arr(p.keyResults).length){h("Key numbers");for(const r of arr(p.keyResults))li((r.label?r.label+": ":"")+(r.value||""))}
+  h("Evidence level");para(`Oxford CEBM level ${l} — ${LEVELS[l]||"unclassified"}.`+(p.levelWhy?" "+p.levelWhy:""));if(p.grade)para("GRADE certainty: "+p.grade+(p.gradeWhy?" — "+p.gradeWhy:""));
+  if(c2){h("Critical appraisal checklist");para("Based on "+c2.d.tool+".");para(bold(c2.ov.label+": "+c2.ov.value)+` (${c2.ov.answered}/${c2.ov.total} answered · ${c2.ov.yes} yes · ${c2.ov.unc} can't tell · ${c2.ov.no} no)`);out.push("");
+    c2.rows.forEach((r,i)=>{out.push(`${i+1}. ${bold(r.domain)}${r.crit?" [KEY]":""} — ${r.q}`,`   Answer: ${ANS[r.a]||"Not answered"}${r.note?" — "+r.note:""}`)})}
+  else if(arr(p.bias).length){h("Risk of bias");for(const b of arr(p.bias))li(`${bold(b.domain)} (${({low:"low",some:"some concerns",high:"high"})[b.risk]||b.risk||"unclear"}): ${b.note||""}`)}
   h("What it adds");arr(p.adds).forEach(li);if(!arr(p.adds).length)li("Not recorded");
   h("What it lacks");arr(p.lacks).forEach(li);if(!arr(p.lacks).length)li("Not recorded");
-  const c2=checklistRows(p);
-  if(arr(p.bias).length&&!c2){h("Risk of bias");for(const b of arr(p.bias))li(`${b.domain} (${({low:"low",some:"some concerns",high:"high"})[b.risk]||b.risk||"unclear"}): ${b.note||""}`)}
-  if(c2){h("Checklist");out.push("Based on "+c2.d.tool+".",c2.ov.label+": "+c2.ov.value,"");for(const r of c2.rows)li(`${r.domain}: ${ANS[r.a]||"Not answered"}${r.note?" — "+r.note:""}`)}
   if(arr(p.practice).length){h("Using it in my practice");arr(p.practice).forEach(li)}
-  if(c.script||arr(c.points).length){h("Counselling patients");if(c.script)out.push(md?"> "+c.script:"\""+c.script+"\"");arr(c.points).forEach(li);for(const x of arr(c.ifTheyAsk))li(`If they ask "${x.q}": ${x.a}`)}
-  h("Does this change my practice?");out.push((md?"**"+(VERDICTS[p.verdict]||"No verdict")+"**":(VERDICTS[p.verdict]||"No verdict"))+(p.verdictWhy?" — "+p.verdictWhy:""));
-  out.push("","Appraised by "+(ENGINE[p.engine]||"Claude")+" from the "+(p.source||"text")+(p.addedAt?" on "+new Date(p.addedAt).toLocaleDateString("en-GB"):"")+". Exported from Retina Appraiser.");
+  if(c.script||arr(c.points).length||arr(c.ifTheyAsk).length){h("Counselling patients");if(c.script)out.push("",md?"> "+c.script:"\""+c.script+"\"");if(arr(c.points).length)out.push("");arr(c.points).forEach(li);
+    for(const x of arr(c.ifTheyAsk))out.push("",bold("If they ask: "+x.q),x.a)}
+  h("Does this change my practice?");para(bold(VERDICTS[p.verdict]||"No verdict yet")+(p.verdict&&VERDICT_HELP[p.verdict]?" — "+VERDICT_HELP[p.verdict]:""));para(p.verdictWhy);
+  const open=c2?c2.rows.filter(r=>r.a==="u"):[];
+  if(open.length){h("For discussion");para("Checklist items we couldn't answer from the paper:");open.forEach(r=>li(r.domain+": "+r.q))}
+  const abs=arr(p.abstractParts).length?p.abstractParts.map(x=>(x.label?bold(x.label)+": ":"")+x.text).join("\n\n"):(p.abstractText||"");
+  if(abs){h("Abstract (from PubMed)");para(abs)}
+  if(c2&&c2.d.refs.length){h("Appraisal tools");for(const r of c2.d.refs)li(link(r.label,pubmedURL(r.pmid)))}
+  out.push("","—","Appraised by "+(ENGINE[p.engine]||"Claude")+" from the "+(p.source||"text")+(p.addedAt?" on "+new Date(p.addedAt).toLocaleDateString("en-GB"):"")+". Exported from Retina Appraiser on "+new Date().toLocaleDateString("en-GB")+".");
   return out.join("\n").replace(/\n{3,}/g,"\n\n").trim()+"\n";
 }
 async function copyText(text){
   try{await navigator.clipboard.writeText(text);return true}
   catch{const t=el("textarea",{style:"position:fixed;opacity:0;top:0"},text);document.body.append(t);t.select();let ok=false;try{ok=document.execCommand("copy")}catch{}t.remove();return ok}
 }
-function download(name,text,type){const a=el("a",{href:URL.createObjectURL(new Blob([text],{type:type+";charset=utf-8"})),download:name});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+const kb=n=>(n/1024).toFixed(1)+" KB";
+/* Android's download manager can read the file after the click returns, so the link is kept alive for a minute */
+function download(name,text,type){const blob=new Blob([text],{type:type+";charset=utf-8"}),a=el("a",{href:URL.createObjectURL(blob),download:name});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),60000);return blob.size}
 function exportBox(p){
   const base=(p.authors||"").split(/[\s,]/)[0]+"-"+(p.year||"")+"-"+(p.title||"appraisal").split(/\s+/).slice(0,6).join("-");
   const slug=base.toLowerCase().normalize("NFKD").replace(/[^a-z0-9-]+/g,"").replace(/-+/g,"-").replace(/^-|-$/g,"").slice(0,70)||"appraisal";
-  return sec("Export appraisal",el("p",{class:"note",text:"Copy to paste into Notion, an email or a journal-club handout, or save it as a file."}),
+  const md=appraisalText(p,true),txt=appraisalText(p,false);
+  const shareFile=new File([md],slug+".md",{type:"text/markdown"});
+  const canShare=!!(navigator.canShare&&navigator.canShare({files:[shareFile]}));
+  const preview=el("pre",{class:"exportpre",text:txt});
+  return sec("Export appraisal",el("p",{class:"note",text:`A full journal-club handout (${kb(new Blob([md]).size)}): summary, key numbers, the whole checklist, verdict, counselling and the PubMed abstract. Copy it into Notion or an email, or save it as a file.`}),
     el("div",{class:"actions"},
-      el("button",{class:"btn",type:"button",onclick:async()=>toast(await copyText(appraisalText(p,false))?"Copied as plain text":"Couldn't copy — use Download .txt instead")},"Copy as text"),
-      el("button",{class:"btn ghost",type:"button",onclick:async()=>toast(await copyText(appraisalText(p,true))?"Copied as Markdown — paste into Notion":"Couldn't copy — use Download .md instead")},"Copy Markdown"),
-      el("button",{class:"btn ghost",type:"button",onclick:()=>download(slug+".md",appraisalText(p,true),"text/markdown")},"Download .md"),
-      el("button",{class:"btn ghost",type:"button",onclick:()=>download(slug+".txt",appraisalText(p,false),"text/plain")},"Download .txt")))}
+      el("button",{class:"btn",type:"button",onclick:async()=>toast(await copyText(txt)?"Copied as plain text ("+kb(new Blob([txt]).size)+")":"Couldn't copy — use Download .txt instead")},"Copy as text"),
+      el("button",{class:"btn ghost",type:"button",onclick:async()=>toast(await copyText(md)?"Copied as Markdown — paste into Notion":"Couldn't copy — use Download .md instead")},"Copy Markdown"),
+      canShare?el("button",{class:"btn ghost",type:"button",onclick:async()=>{try{await navigator.share({files:[shareFile],title:p.title||"Appraisal"})}catch(e){if(e.name!=="AbortError")toast("Couldn't share — use Download instead")}}},"Share file…"):null,
+      el("button",{class:"btn ghost",type:"button",onclick:()=>toast("Saved "+slug+".md ("+kb(download(slug+".md",md,"text/markdown"))+") — check Downloads")},"Download .md"),
+      el("button",{class:"btn ghost",type:"button",onclick:()=>toast("Saved "+slug+".txt ("+kb(download(slug+".txt",txt,"text/plain"))+") — check Downloads")},"Download .txt")),
+    el("details",{class:"why"},el("summary",{text:"Preview what's exported"}),preview))}
 
 function paperAsArticle(p){return{pmid:p.pmid||"",pmc:p.pmc||"",doi:p.doi||"",title:p.title,journal:p.journal,journalAbbr:p.journal,year:p.year,authors:p.authors?[p.authors]:[],authorShort:p.authors||"",abstract:p.abstractText||"",abstractParts:p.abstractParts||null,pubTypes:p.pubTypes||[],mesh:[],fullText:p.sourceText||""}}
 
@@ -782,7 +805,7 @@ function openManual(a,existing){
       bias:Object.entries(worst).map(([domain,v])=>({domain,risk:v.risk,note:v.note})),
       counselling:{script:fScript.value.trim(),points:[],ifTheyAsk:[]},
       verdict:verdict.value,verdictWhy:fWhy.value.trim(),
-      answers:Object.fromEntries(Object.entries(st.answers).filter(([,v])=>v)),notes:Object.fromEntries(Object.entries(st.notes).filter(([,v])=>v)),engine:"manual",source:a.fullText?"full text":"abstract",
+      answers:Object.fromEntries(Object.entries(st.answers).filter(([,v])=>v)),notes:Object.fromEntries(Object.entries(st.notes).filter(([,v])=>v)),engine:"manual",spotted:[...facts.f,...facts.w.filter(w=>!/registration/.test(w)||regRelevant())],source:a.fullText?"full text":"abstract",
       pubTypes:a.pubTypes||[],abstractText:a.abstract||"",abstractParts:a.abstractParts||null,sourceText:text.slice(0,80000),
       addedAt:existing?.addedAt||Date.now(),read:true,starred:!!existing?.starred};
     const id=await savePaper(doc);store.set(draftKey,null);toast("Saved to your library");openPaper(id);
