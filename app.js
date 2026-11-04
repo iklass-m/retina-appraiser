@@ -863,6 +863,58 @@ $("#newform").onsubmit=async e=>{e.preventDefault();
   catch(err){$("#status").textContent=err.message||"Couldn't appraise that."}finally{$("#go").disabled=false;await holdAwake(false)}};
 $("#goManual").onclick=()=>{const body=(pdfText||$("#text").value.trim());if(!body){$("#status").textContent="Upload a PDF or paste the text first.";return}openManual(uploadedArticle(),null)};
 
+/* ---------- bring in a paper already given to Claude (copy and paste; the app never contacts Claude) ---------- */
+const CLAUDE_REQUEST=APPRAISE.replace("Critically appraise the research paper below","Critically appraise the research paper I have shared in this chat (the attached PDF or the pasted text)")+`
+
+Also add these fields to the same JSON object, with "sourceText" as the LAST field:
+"pmid":"", "pmc":"", "doi":"" — only if printed in the paper or you are certain of them, otherwise "".
+"sourceText":"" — the paper's full text, copied as completely as you can: abstract, methods, results, discussion and the contents of tables. Leave out the reference list.
+
+Reply with the JSON in one single code block and nothing else, so I can copy it in one tap. This is for my Retina Appraiser app.`;
+$("#copyreq").onclick=async()=>toast(await copyText(CLAUDE_REQUEST)?"Copied — paste it into your Claude chat with the paper":"Couldn't copy on this device");
+/* Claude's reply may be cut off inside a very long sourceText: keep the appraisal and as much of the text as arrived */
+function salvageClaude(t){
+  const i=t.search(/"sourceText"\s*:\s*"/);if(i<0)return null;
+  const head=t.slice(t.indexOf("{"),i).replace(/,\s*$/,"")+"}";
+  let j;try{j=JSON.parse(head)}catch{return null}
+  let body=t.slice(i).replace(/^"sourceText"\s*:\s*"/,"").replace(/```[\s\S]*$/,"").replace(/"\s*}\s*$/,"");
+  try{body=JSON.parse('"'+body+'"')}catch{body=body.replace(/\\n/g,"\n").replace(/\\t/g," ").replace(/\\"/g,'"').replace(/\\\\/g,"\\").replace(/\\$/,"")}
+  j.sourceText=body;j._cut=true;return j}
+const STR=["title","authors","journal","year","topic","design","population","n","followUp","intervention","comparator","primaryOutcome","funding","levelWhy","grade","gradeWhy","bottomLine","summary","verdictWhy"];
+function claudeDoc(a){
+  const doc={};for(const k of STR)if(a[k]!=null&&a[k]!=="")doc[k]=String(a[k]);
+  const pairs=(x,ks)=>arr(x).filter(o=>o&&typeof o==="object").map(o=>Object.fromEntries(ks.map(k=>[k,String(o[k]??"")])));
+  doc.keyResults=pairs(a.keyResults,["label","value"]);doc.bias=pairs(a.bias,["domain","risk","note"]);
+  for(const k of ["adds","lacks","practice"])doc[k]=arr(a[k]).map(String);
+  const c=a.counselling||{};doc.counselling={script:String(c.script||""),points:arr(c.points).map(String),ifTheyAsk:pairs(c.ifTheyAsk,["q","a"])};
+  doc.level=String(a.level||"").replace(/\D/g,"").slice(0,1)||"?";
+  doc.verdict=VERDICTS[a.verdict]?a.verdict:"know";
+  if(!TOPICS.includes(doc.topic))doc.topic="Other retina";
+  const pmid=String(a.pmid||"").replace(/\D/g,"");if(pmid.length>=5)doc.pmid=pmid;
+  if(/^PMC\d+$/i.test(String(a.pmc||"").trim()))doc.pmc=String(a.pmc).trim().toUpperCase();
+  const doi=String(a.doi||"").trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i,"").replace(/^doi:\s*/i,"");if(/^10\.\d{4,9}\//.test(doi))doc.doi=doi;
+  doc.sourceText=String(a.sourceText||"").slice(0,80000);
+  return Object.assign(doc,{engine:"claude",source:doc.sourceText.length>3000?"full text (shared with Claude)":"paper shared with Claude",addedAt:Date.now(),read:false});
+}
+$("#claudeadd").onclick=async()=>{
+  const raw=$("#claudein").value.trim(),st=$("#claudestatus");
+  if(!raw){st.textContent="Paste Claude's reply first.";return}
+  let j=parseJSON(raw)||salvageClaude(raw);
+  const list=Array.isArray(j)?j:Array.isArray(j?.papers)?j.papers:j?[j]:[];
+  const good=list.filter(a=>a&&typeof a==="object"&&a.title);
+  if(!good.length){
+    if(raw.length>400){$("#text").value=raw;$("#newform").closest("details").open=true;st.textContent="That looks like the paper itself rather than Claude's appraisal. It's now in the paste box above: tap AI appraise or Appraise myself.";return}
+    st.textContent="That isn't Claude's appraisal block. Copy Claude's whole reply (the code block) and paste it again.";return}
+  let last;
+  for(const a of good){const doc=claudeDoc(a);const have=doc.pmid&&papers.find(p=>String(p.pmid)===doc.pmid);
+    if(have)Object.assign(doc,{id:have.id,starred:!!have.starred,abstractText:have.abstractText,abstractParts:have.abstractParts,pubTypes:have.pubTypes});
+    last=await savePaper(doc)}
+  $("#claudein").value="";
+  st.textContent=good.some(a=>a._cut)?"Added. Claude's reply was cut off part-way through the paper text, so only part of the full text came across.":"";
+  toast(good.length>1?`Added ${good.length} papers from Claude`:"Added from Claude — full text included");
+  openPaper(last);
+};
+
 /* ---------- settings ---------- */
 $("#gkey").value=gKey();
 async function fillModels(){const sel=$("#gmodel");const cur=store.get("gmodel","");sel.replaceChildren(el("option",{value:"",text:"Automatic (newest free Flash)"}));

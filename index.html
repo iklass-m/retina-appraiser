@@ -290,6 +290,21 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
         <div class="status" id="status" aria-live="polite"></div>
       </form>
     </details>
+    <details class="upload" id="fromclaude">
+      <summary>Already gave the paper to Claude? Bring it in without re-uploading</summary>
+      <div class="form">
+        <ol class="steps">
+          <li>Tap <b>Copy request for Claude</b> and paste it into the Claude chat that already has the paper.</li>
+          <li>Claude replies with one block of text. Copy all of it (the copy icon on the block).</li>
+          <li>Paste it below and tap <b>Add to library</b>.</li>
+        </ol>
+        <div class="actions"><button class="btn ghost" type="button" id="copyreq">Copy request for Claude</button></div>
+        <div class="field"><label for="claudein">Claude's reply</label><textarea id="claudein" rows="5" placeholder="Paste Claude's reply here…"></textarea></div>
+        <div class="actions"><button class="btn" type="button" id="claudeadd">Add to library</button></div>
+        <div class="status" id="claudestatus" aria-live="polite"></div>
+        <p class="note">Optional: it's only copy and paste, and the app never contacts Claude. The paper's full text comes with Claude's appraisal, so Appraise myself, Ask Gemini and Export can use it.</p>
+      </div>
+    </details>
   </section>
 
   <!-- LIBRARY -->
