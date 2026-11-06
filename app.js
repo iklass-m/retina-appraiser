@@ -896,6 +896,12 @@ function claudeDoc(a){
   doc.sourceText=String(a.sourceText||"").slice(0,80000);
   return Object.assign(doc,{engine:"claude",source:doc.sourceText.length>3000?"full text (shared with Claude)":"paper shared with Claude",addedAt:Date.now(),read:false});
 }
+const normTitle=t=>String(t||"").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
+function samePaper(p,d){
+  if(d.pmid&&String(p.pmid)===d.pmid)return true;
+  if(d.doi&&p.doi&&p.doi.toLowerCase()===d.doi.toLowerCase())return true;
+  const a=normTitle(p.title),b=normTitle(d.title);
+  return a.length>20&&b.length>20&&(a===b||a.startsWith(b)||b.startsWith(a))}
 $("#claudeadd").onclick=async()=>{
   const raw=$("#claudein").value.trim(),st=$("#claudestatus");
   if(!raw){st.textContent="Paste Claude's reply first.";return}
@@ -905,13 +911,19 @@ $("#claudeadd").onclick=async()=>{
   if(!good.length){
     if(raw.length>400){$("#text").value=raw;$("#newform").closest("details").open=true;st.textContent="That looks like the paper itself rather than Claude's appraisal. It's now in the paste box above: tap AI appraise or Appraise myself.";return}
     st.textContent="That isn't Claude's appraisal block. Copy Claude's whole reply (the code block) and paste it again.";return}
-  let last;
-  for(const a of good){const doc=claudeDoc(a);const have=doc.pmid&&papers.find(p=>String(p.pmid)===doc.pmid);
-    if(have)Object.assign(doc,{id:have.id,starred:!!have.starred,abstractText:have.abstractText,abstractParts:have.abstractParts,pubTypes:have.pubTypes});
+  let last,updated=0;
+  for(const a of good){const doc=claudeDoc(a);
+    /* Claude often leaves out the PMID, so also recognise the paper by DOI or title — Claude's version replaces the one already here */
+    const same=papers.filter(p=>samePaper(p,doc));
+    if(same.length){const keep=same.find(p=>p.pmid)||same[0];updated++;
+      Object.assign(doc,{id:keep.id,pmid:doc.pmid||keep.pmid||"",pmc:doc.pmc||keep.pmc||"",doi:doc.doi||keep.doi||"",starred:same.some(p=>p.starred),
+        abstractText:keep.abstractText,abstractParts:keep.abstractParts,pubTypes:keep.pubTypes,journal:keep.journal||doc.journal,year:keep.year||doc.year,authors:keep.authors||doc.authors,title:keep.title||doc.title});
+      for(const p of same)if(p.id!==keep.id)await dbDel(p.id)}
     last=await savePaper(doc)}
   $("#claudein").value="";
-  st.textContent=good.some(a=>a._cut)?"Added. Claude's reply was cut off part-way through the paper text, so only part of the full text came across.":"";
-  toast(good.length>1?`Added ${good.length} papers from Claude`:"Added from Claude — full text included");
+  const what=good.length>1?`${good.length} papers from Claude (${updated} updated)`:updated?"Updated your existing appraisal with Claude's version":"Added as a new paper";
+  st.textContent=what+(good.some(a=>a._cut)?". Claude's reply was cut off part-way through the paper text, so only part of the full text came across.":".");
+  toast(what);
   openPaper(last);
 };
 
