@@ -22,12 +22,19 @@ const dbPut=doc=>tx("readwrite",s=>{s.put(doc)});
 const dbDel=id=>tx("readwrite",s=>{s.delete(id)});
 
 let papers=[],view="find",lastList="find",openId=null,vfilter="";
-async function reload(){papers=(await dbAll()).sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));$("#stamp").textContent=papers.length+" papers appraised";$("#libcount").textContent=papers.length+" papers on this device."}
-async function savePaper(doc){doc.id=doc.id||(doc.pmid?"pm"+doc.pmid:"u"+Date.now().toString(36));await dbPut(doc);await reload();return doc.id}
-async function patch(id,data){const p=papers.find(x=>x.id===id);if(!p)return;Object.assign(p,data);await dbPut(p)}
+/* when a paper's appraisal last changed (bundled examples count as oldest); stars and read marks are timed separately */
+const stamp=p=>p.updatedAt??(p.engine?p.addedAt||1:1);
+const isMine=p=>["manual","gemini","claude"].includes(p.engine);
+function drawStamp(){const mine=papers.filter(isMine).length;$("#stamp").textContent=papers.length+" papers · "+mine+" appraised by you"+(syncMsg?" · "+syncMsg:"")}
+async function reload(){papers=(await dbAll()).sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));drawStamp();$("#libcount").textContent=papers.length+" papers on this device."}
+async function savePaper(doc){doc.id=doc.id||(doc.pmid?"pm"+doc.pmid:"u"+Date.now().toString(36));doc.updatedAt=Date.now();await dbPut(doc);await reload();syncSoon();return doc.id}
+async function patch(id,data){const p=papers.find(x=>x.id===id);if(!p)return;Object.assign(p,data,Object.keys(data).every(k=>k==="read"||k==="starred")?{flagsAt:Date.now()}:{updatedAt:Date.now()});await dbPut(p);syncSoon()}
+async function removePaper(id){await dbDel(id);store.set("tombs",{...store.get("tombs",{}),[id]:Date.now()});syncSoon()}
+/* unfinished "Appraise myself" drafts (kept per paper until saved) */
+function allDrafts(raw){const out=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(!k.startsWith("ra:draft:"))continue;const d=store.get(k.slice(3),null);if(!d||!d.at)continue;if(raw)out.push({key:k.slice(3),val:d});else if(!d.deleted&&d.article)out.push({key:k.slice(3),...d})}}catch{}return out.sort((a,b)=>(b.at||0)-(a.at||0))}
 
 /* ---------- tabs ---------- */
-const isList=v=>v==="library"||v==="uveitis"||v==="starred";
+const isList=v=>v==="mine"||v==="library"||v==="uveitis"||v==="starred";
 const wideMQ=matchMedia("(min-width:900px)");
 /* Tablet/desktop: with an appraisal open, the list it came from stays on the left. */
 function markOpen(){let sel=null;for(const c of $("#list").children){const on=c.dataset.id===openId&&view==="detail";c.classList.toggle("sel",on);if(on)sel=c}return sel}
@@ -35,11 +42,12 @@ function setTopH(){document.documentElement.style.setProperty("--toph",($(".top"
 function show(v){
   view=v;
   const split=wideMQ.matches&&v==="detail";
-  document.body.classList.toggle("split",split);
-  for(const t of ["find","library","uveitis","starred"])$("#t-"+t).setAttribute("aria-selected",String(t===v||((v==="detail"||v==="manual")&&t===lastList)));
+  const msplit=wideMQ.matches&&v==="manual";
+  document.body.classList.toggle("split",split);document.body.classList.toggle("msplit",msplit);if(msplit)setTopH();
+  for(const t of ["find","mine","library","uveitis","starred"])$("#t-"+t).setAttribute("aria-selected",String(t===v||((v==="detail"||v==="manual")&&t===lastList)));
   $("#t-settings").setAttribute("aria-pressed",String(v==="settings"));
   $("#v-find").hidden=!(v==="find"||(split&&lastList==="find"));$("#v-library").hidden=!(isList(v)||(split&&isList(lastList)));$("#v-detail").hidden=v!=="detail";$("#v-manual").hidden=v!=="manual";$("#v-settings").hidden=v!=="settings";
-  $("#topic").hidden=v==="uveitis";
+  $("#topic").hidden=v==="uveitis";$("#vchips").hidden=v==="mine";
   if(isList(v)){lastList=v;renderList()}
   if(v==="find"){lastList="find";renderResults()}
   if(split){setTopH();if(isList(lastList)&&!$("#list").children.length)renderList()}
@@ -52,6 +60,7 @@ let manualArticle=null,restoring=false;
 function saveState(){if(restoring)return;store.set("state",{view,lastList,openId,manual:view==="manual"&&manualArticle?{...manualArticle,fullText:""}:null,
   fq:$("#fq").value,preset,ftype:$("#ftype").value,fdate:$("#fdate").value,fsort:$("#fsort").value,fjournals:$("#fjournals").checked,q:$("#q").value,topic:$("#topic").value,vfilter,at:Date.now()})}
 $("#t-find").onclick=()=>{show("find");if(!searched)runSearch()};
+$("#t-mine").onclick=()=>show("mine");
 $("#t-library").onclick=()=>show("library");
 $("#t-uveitis").onclick=()=>show("uveitis");
 $("#t-starred").onclick=()=>show("starred");
@@ -68,15 +77,25 @@ function renderList(){
   const lv=isList(view)?view:lastList;
   const list=$("#list");list.replaceChildren();
   const q=$("#q").value.trim().toLowerCase(),tp=$("#topic").value;
-  let rows=papers.filter(p=>lv==="starred"?p.starred:lv==="uveitis"?p.topic==="Uveitis":p.topic!=="Uveitis");
+  const mine=lv==="mine";
+  let rows=papers.filter(p=>mine?isMine(p):lv==="starred"?p.starred:lv==="uveitis"?p.topic==="Uveitis":p.topic!=="Uveitis");
+  if(mine)rows.sort((a,b)=>stamp(b)-stamp(a));
   if(tp&&lv!=="uveitis")rows=rows.filter(p=>p.topic===tp);
-  if(vfilter==="unread")rows=rows.filter(p=>!p.read);else if(vfilter)rows=rows.filter(p=>p.verdict===vfilter);
+  if(mine){}else if(vfilter==="unread")rows=rows.filter(p=>!p.read);else if(vfilter)rows=rows.filter(p=>p.verdict===vfilter);
+  /* Mine: unfinished appraisals first, so nothing she started gets lost */
+  const drafts=mine&&view==="mine"?allDrafts().filter(d=>!q||(d.title||"").toLowerCase().includes(q)):[];
+  for(const d of drafts){const n=Object.values(d.answers||{}).filter(Boolean).length;
+    list.append(el("article",{class:"res"},el("div",{class:"row"},el("span",{class:"pill v-know",text:"In progress"})),
+      el("h3",{text:d.title||"Untitled paper"}),el("div",{class:"meta",text:"Not saved yet · "+n+" checklist answer"+(n===1?"":"s")+" · last edited "+new Date(d.at).toLocaleDateString("en-GB")}),
+      el("div",{class:"actions"},el("button",{class:"btn",type:"button",onclick:()=>startManual({...d.article})},"Continue"),
+        el("button",{class:"btn ghost",type:"button",onclick:e=>{const b=e.currentTarget;if(b.dataset.sure){store.set(d.key,{deleted:true,at:Date.now()});syncSoon();renderList()}else{b.dataset.sure="1";b.textContent="Tap again to discard"}}},"Discard"))))}
   if(q)rows=rows.filter(p=>JSON.stringify([p.title,p.journal,p.bottomLine,p.summary,p.intervention,p.topic,p.authors]).toLowerCase().includes(q));
-  $("#count").textContent=`${rows.length} paper${rows.length===1?"":"s"}`;
-  if(!rows.length){list.append(el("div",{class:"empty"},el("h3",{text:lv==="uveitis"?"No uveitis papers yet":lv==="starred"?"No starred papers yet":papers.length?"Nothing matches":"Your library is empty"}),el("p",{text:lv==="starred"?"Tap ☆ Star on any appraisal to keep it here.":papers.length&&(q||vfilter||tp)?"Clear the search or filters.":"Find a paper and tap AI appraise or Appraise myself."})));return}
+  $("#count").textContent=`${rows.length} paper${rows.length===1?"":"s"}`+(mine?" appraised by you or your AI"+(drafts.length?` · ${drafts.length} in progress`:""):"");
+  if(!rows.length){list.append(el("div",{class:"empty"},el("h3",{text:mine?(drafts.length?"Nothing finished yet":"You haven't appraised a paper yet"):lv==="uveitis"?"No uveitis papers yet":lv==="starred"?"No starred papers yet":papers.length?"Nothing matches":"Your library is empty"}),el("p",{text:mine?"Papers you appraise yourself, with Gemini, or bring in from Claude are kept here. Start from the Find tab.":lv==="starred"?"Tap ☆ Star on any appraisal to keep it here.":papers.length&&(q||vfilter||tp)?"Clear the search or filters.":"Find a paper and tap AI appraise or Appraise myself."})));return}
   for(const p of rows)list.append(el("div",{class:"card"+(p.read?"":" unread")+(p.id===openId&&view==="detail"?" sel":""),"data-id":p.id,role:"button",tabindex:"0",onclick:()=>openPaper(p.id),onkeydown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openPaper(p.id)}}},levelSeal(p),el("div",{class:"body"},
     el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p)),
     el("h3",{text:p.title||"Untitled"}),el("div",{class:"meta",text:[p.authors,p.journal,p.year].filter(Boolean).join(" · ")}),
+    mine?el("div",{class:"meta",text:"Appraised by "+(ENGINE[p.engine]||"you")+" · "+new Date(stamp(p)).toLocaleDateString("en-GB")}):null,
     p.bottomLine?el("p",{class:"bl",text:p.bottomLine}):null),starButton(p,renderList)));
 }
 /* one star control used on cards, results and the appraisal sheet */
@@ -105,7 +124,7 @@ function openPaper(id){
   const l=String(p.level||"?"),c=p.counselling||{},script=c.script||"";
   const bq=el("blockquote",{text:script||"No counselling script."});
   const copyBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{try{await navigator.clipboard.writeText(script);toast("Copied")}catch{const r=document.createRange();r.selectNodeContents(bq);const s=getSelection();s.removeAllRanges();s.addRange(r);toast("Selected — copy it from the menu")}}},"Copy what to say");
-  const delBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{if(delBtn.dataset.sure){await dbDel(id);await reload();toast("Removed from library");show(lastList==="find"?"library":lastList)}else{delBtn.dataset.sure="1";delBtn.textContent="Tap again to remove"}}},"Remove");
+  const delBtn=el("button",{class:"btn ghost",type:"button",onclick:async()=>{if(delBtn.dataset.sure){await removePaper(id);await reload();toast("Removed from library");show(lastList==="find"?"library":lastList)}else{delBtn.dataset.sure="1";delBtn.textContent="Tap again to remove"}}},"Remove");
   v.append(el("div",{class:"topbar"},el("button",{class:"back",onclick:()=>show(lastList)},lastList==="find"?"← Back to search":"← Back to library"),starButton(p)),
     el("article",{class:"sheet"},
       el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p),p.source?el("span",{class:"pill type",text:"from "+p.source}):null),
@@ -720,7 +739,9 @@ function openManual(a,existing){
   /* unsaved answers survive a reload: a draft is kept per paper until it is saved */
   manualArticle=a;
   const draftKey="draft:"+(a.pmid||a.title||"paper");
-  const init=existing||store.get(draftKey,null);
+  const dr=store.get(draftKey,null),draft=dr&&!dr.deleted?dr:null;
+  existing=existing||(draft?.existingId&&papers.find(p=>p.id===draft.existingId))||null;
+  const init=draft?{...(existing||{}),...draft}:existing;
   lastList=view==="detail"?lastList:view==="find"?"find":lastList;
   const v=$("#v-manual");v.replaceChildren();
   const text=[a.abstract,a.fullText].filter(Boolean).join("\n\n");
@@ -817,18 +838,22 @@ function openManual(a,existing){
       answers:Object.fromEntries(Object.entries(st.answers).filter(([,v])=>v)),notes:Object.fromEntries(Object.entries(st.notes).filter(([,v])=>v)),engine:"manual",spotted:[...facts.f,...facts.w.filter(w=>!/registration/.test(w)||regRelevant())],source:a.fullText?"full text":"abstract",
       pubTypes:a.pubTypes||[],abstractText:a.abstract||"",abstractParts:a.abstractParts||null,sourceText:text.slice(0,80000),
       addedAt:existing?.addedAt||Date.now(),read:true,starred:!!existing?.starred};
-    const id=await savePaper(doc);store.set(draftKey,null);toast("Saved to your library");openPaper(id);
+    const id=await savePaper(doc);store.set(draftKey,{deleted:true,at:Date.now()});toast("Saved to your library");openPaper(id);
   };
-  const saveDraft=()=>{if(view!=="manual")return;store.set(draftKey,{designKey:st.design,answers:st.answers,notes:st.notes,level:lvl.value,grade:grade.value,bottomLine:fBottom.value,summary:fSummary.value,keyResults:nums,adds:lines(fAdds.value),lacks:lines(fLacks.value),practice:lines(fPractice.value),counselling:{script:fScript.value},topic:topic.value,verdict:verdict.value,verdictWhy:fWhy.value})};
+  const saveDraft=()=>{if(view!=="manual")return;store.set(draftKey,{designKey:st.design,answers:st.answers,notes:st.notes,level:lvl.value,grade:grade.value,bottomLine:fBottom.value,summary:fSummary.value,keyResults:nums,adds:lines(fAdds.value),lacks:lines(fLacks.value),practice:lines(fPractice.value),counselling:{script:fScript.value},topic:topic.value,verdict:verdict.value,verdictWhy:fWhy.value,at:Date.now(),title:a.title||"Untitled paper",article:{...a,fullText:""},existingId:existing?.id});syncSoon(20000)};
   let draftTimer;v.oninput=v.onchange=v.onclick=()=>{clearTimeout(draftTimer);draftTimer=setTimeout(saveDraft,400)};
 
+  if(ftBox&&wideMQ.matches)ftBox.open=true;
+  /* two cards: the paper, then the appraisal — side by side on a tablet or PC (the paper stays in view while she answers) */
   v.append(el("button",{class:"back",onclick:()=>existing?openPaper(existing.id):show(lastList)},"← Back"),
-    el("article",{class:"sheet"},
+   el("div",{class:"mgrid"},
+    el("article",{class:"sheet mpaper"},
       el("div",{class:"row"},el("span",{class:"pill type",text:"Appraise it myself — no AI"})),
       el("h2",{text:a.title||"Untitled paper"}),
       el("div",{class:"cite"},[a.authorShort,a.journal,a.year].filter(Boolean).join(" · ")," ",links({pmid:a.pmid,pmc:a.pmc,doi:a.doi})),
       el("div",{class:"sec"},el("h4",{text:"The paper"}),el("p",{class:"note",text:"Numbers, percentages, confidence intervals and p-values are highlighted."}),paperBox,ftBox),
-      el("div",{class:"sec"},el("h4",{text:"Spotted automatically"}),el("div",{class:"found"},facts.f.map(x=>el("span",{text:x})),facts.w.map(x=>el("span",{class:"warnf",text:x}))),el("p",{class:"note",text:"Pattern-matched from the text — check each one."})),
+      el("div",{class:"sec"},el("h4",{text:"Spotted automatically"}),el("div",{class:"found"},facts.f.map(x=>el("span",{text:x})),facts.w.map(x=>el("span",{class:"warnf",text:x}))),el("p",{class:"note",text:"Pattern-matched from the text — check each one."}))),
+    el("article",{class:"sheet"},
       el("div",{class:"sec"},el("h4",{text:"Study type & evidence level"}),el("div",{class:"field"},el("label",{for:"m-design",text:"Study type (suggested: "+dwhy+")"}),dsel),el("div",{class:"field"},el("label",{for:"m-level",text:"Oxford CEBM level"}),lvl),el("div",{class:"field"},el("label",{for:"m-grade",text:"How certain is the main result? (GRADE)"}),grade),el("p",{class:"note",text:"Move the level down one if the checklist shows serious bias or imprecision."})),
       qbox,
       el("div",{class:"sec"},el("h4",{text:"Your appraisal"}),
@@ -844,7 +869,7 @@ function openManual(a,existing){
         el("p",{class:"guide",text:"Weigh it up: are the results valid (checklist above), are they important (size and precision of the effect), and do they apply to my patients and service?"}),
         overallSummary,verdictBox,
         el("div",{class:"field"},el("label",{for:"m-why",text:"Why — in one line"}),fWhy)),
-      el("div",{class:"actions"},el("button",{class:"btn",type:"button",onclick:save},"Save appraisal")),status));
+      el("div",{class:"actions"},el("button",{class:"btn",type:"button",onclick:save},"Save appraisal")),status)));
   show("manual");
 }
 
@@ -927,7 +952,7 @@ $("#claudeadd").onclick=async()=>{
     if(same.length){const keep=same.find(p=>p.pmid)||same[0];updated++;
       Object.assign(doc,{id:keep.id,pmid:doc.pmid||keep.pmid||"",pmc:doc.pmc||keep.pmc||"",doi:doc.doi||keep.doi||"",starred:same.some(p=>p.starred),
         abstractText:keep.abstractText,abstractParts:keep.abstractParts,pubTypes:keep.pubTypes,journal:keep.journal||doc.journal,year:keep.year||doc.year,authors:keep.authors||doc.authors,title:keep.title||doc.title});
-      for(const p of same)if(p.id!==keep.id)await dbDel(p.id)}
+      for(const p of same)if(p.id!==keep.id)await removePaper(p.id)}
     last=await savePaper(doc)}
   $("#claudein").value="";
   const what=good.length>1?`${good.length} papers from Claude (${updated} updated)`:updated?"Updated your existing appraisal with Claude's version":"Added as a new paper";
@@ -965,6 +990,77 @@ $("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;
     await reload();$("#libstatus").textContent=`Imported: ${added} new, ${updated} updated.`}
   catch{$("#libstatus").textContent="That file isn't a Retina Appraiser library."}finally{e.target.value=""}};
 
+/* ---------- sync between devices ----------
+   The library lives in a secret gist in her own GitHub account: no server of ours, nothing paid.
+   Papers are spread over 16 small files (by id) so a change uploads only the file it touches.
+   Newest edit wins per paper; stars/read marks are merged separately; deletions travel as tombstones. */
+const GH="https://api.github.com/",SYNC_FILES=16,SYNC_MARK="retina-appraiser.json";
+const ghToken=()=>store.get("ghtoken","");
+const bucketOf=id=>{let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return "lib-"+(h%SYNC_FILES).toString(16)+".json"};
+async function gh(path,opt={}){
+  let r;try{r=await fetch(GH+path,{...opt,cache:"no-store",headers:{Accept:"application/vnd.github+json",Authorization:"Bearer "+ghToken(),...(opt.body?{"Content-Type":"application/json"}:{})}})}
+  catch{throw new Error(navigator.onLine?"couldn't reach GitHub (this network may block it)":"offline — it will sync when you're back online")}
+  if(!r.ok){const e=new Error(r.status===401?"GitHub didn't accept the token — create a new one and paste it again":r.status===403?"GitHub refused: the token needs the 'gist' permission (or try again in a few minutes)":"GitHub error "+r.status);e.status=r.status;throw e}
+  return r.json()}
+function mergePaper(l,r){const base=stamp(r)>stamp(l)?r:l,f=(r.flagsAt||0)>(l.flagsAt||0)?r:l;
+  return base===l&&f===l?l:{...base,read:f.read,starred:f.starred,flagsAt:f.flagsAt}}
+const bucketSig=b=>arr(b?.papers).map(p=>p.id+":"+stamp(p)+":"+(p.flagsAt||0)).sort().join()+"|"+Object.entries(b?.gone||{}).map(x=>x.join(":")).sort().join();
+const draftSig=d=>Object.entries(d||{}).map(([k,v])=>k+":"+(v?.at||0)).sort().join();
+let syncing=false,syncAgain=false,syncTimer,syncMsg="";
+function setSync(t){syncMsg=t;drawStamp();const s=$("#syncstatus");if(s)s.textContent=t}
+function syncSoon(ms=4000){if(!ghToken())return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncNow(),ms)}
+async function syncNow(){
+  if(!ghToken()||!idb)return false;
+  if(syncing){syncAgain=true;return false}
+  syncing=true;clearTimeout(syncTimer);setSync("Syncing…");
+  try{
+    let id=store.get("gistid",""),g=null;
+    if(id){try{g=await gh("gists/"+id)}catch(e){if(e.status!==404)throw e;id=""}}
+    if(!id){const found=(await gh("gists?per_page=100")).find(x=>x.files&&x.files[SYNC_MARK]);
+      g=found?await gh("gists/"+found.id):await gh("gists",{method:"POST",body:JSON.stringify({description:"Retina Appraiser library (sync — please don't edit by hand)",public:false,files:{[SYNC_MARK]:{content:JSON.stringify({app:"retina-appraiser",sync:1})}}})});
+      store.set("gistid",g.id)}
+    const remote={};
+    for(const[name,f]of Object.entries(g.files||{})){if(!/^(lib-[0-9a-f]|drafts)\.json$/.test(name))continue;
+      let t=f.content;if(f.truncated){const r=await fetch(f.raw_url);if(!r.ok)throw new Error("couldn't download "+name);t=await r.text()}
+      remote[name]=JSON.parse(t)}
+    /* papers */
+    const L=new Map((await dbAll()).map(p=>[p.id,p])),R=new Map(),gone={...store.get("tombs",{})};let pulled=0;
+    for(const[name,b]of Object.entries(remote)){if(name==="drafts.json")continue;
+      for(const p of arr(b.papers))if(p&&p.id)R.set(p.id,p);
+      for(const[k,t]of Object.entries(b.gone||{}))if(!(gone[k]>=t))gone[k]=t}
+    for(const[k,t]of Object.entries(gone)){const l=L.get(k),r=R.get(k);
+      if((l&&stamp(l)>t)||(r&&stamp(r)>t)||Date.now()-t>365*864e5){delete gone[k];continue}   // appraised again since, or long forgotten
+      if(l){await dbDel(k);L.delete(k);pulled++}
+      if(r)R.delete(k)}
+    for(const[k,r]of R){const l=L.get(k),m=l?mergePaper(l,r):r;if(m!==l){await dbPut(m);L.set(k,m);pulled++}}
+    const out={},files={};
+    for(let i=0;i<SYNC_FILES;i++)out["lib-"+i.toString(16)+".json"]={papers:[],gone:{}};
+    for(const p of L.values())out[bucketOf(p.id)].papers.push(p);
+    for(const[k,t]of Object.entries(gone))out[bucketOf(k)].gone[k]=t;
+    for(const[name,b]of Object.entries(out))if(bucketSig(b)!==bucketSig(remote[name]))files[name]={content:JSON.stringify(b)};
+    /* unfinished drafts */
+    const D={},RD=remote["drafts.json"]||{};
+    for(const d of allDrafts(true))D[d.key]=d.val;
+    for(const[k,r]of Object.entries(RD)){if(!r||!k.startsWith("draft:"))continue;if(!D[k]||(r.at||0)>(D[k].at||0)){D[k]=r;store.set(k,r);pulled++}}
+    for(const[k,d]of Object.entries(D))if(d.deleted&&Date.now()-(d.at||0)>30*864e5){delete D[k];try{localStorage.removeItem("ra:"+k)}catch{}}
+    if(draftSig(D)!==draftSig(RD))files["drafts.json"]={content:JSON.stringify(D)};
+    if(Object.keys(files).length)await gh("gists/"+store.get("gistid",""),{method:"PATCH",body:JSON.stringify({files})});
+    store.set("tombs",gone);store.set("lastSync",Date.now());
+    if(pulled){await reload();if(isList(view)||document.body.classList.contains("split"))renderList();if(view==="find")renderResults()}
+    setSync("Synced "+new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}));
+    return true;
+  }catch(e){setSync("Not synced: "+(e.message||"unknown problem"));return false}
+  finally{syncing=false;if(syncAgain){syncAgain=false;syncSoon(1500)}}
+}
+$("#ghtoken").value=ghToken();
+$("#syncon").onclick=async()=>{const t=$("#ghtoken").value.trim();if(!t){$("#syncstatus").textContent="Paste your GitHub token first.";return}
+  store.set("ghtoken",t);store.set("gistid","");
+  if(await syncNow())$("#syncstatus").textContent="Sync is on. "+papers.length+" papers on this device — do the same on your other devices."};
+$("#syncnow").onclick=()=>{if(!ghToken()){$("#syncstatus").textContent="Sync isn't on yet — paste a token and tap Turn on sync.";return}syncNow()};
+$("#syncoff").onclick=()=>{store.set("ghtoken","");store.set("gistid","");$("#ghtoken").value="";setSync("");$("#syncstatus").textContent="Sync turned off on this device. Your library here is untouched."};
+document.addEventListener("visibilitychange",()=>{if(!ghToken())return;if(document.hidden){if(syncTimer)syncNow()}else if(Date.now()-store.get("lastSync",0)>60000)syncNow()});
+addEventListener("online",()=>syncSoon(1000));
+
 /* ---------- coming back after a reload ---------- */
 function restoreState(){
   const s=store.get("state",null);
@@ -979,7 +1075,7 @@ function restoreState(){
   if(lastList==="find"||s.view==="find")runSearch();else searched=false;
   if(s.view==="detail"&&papers.some(p=>p.id===s.openId))openPaper(s.openId);
   else if(s.view==="manual"&&s.manual)startManual(s.manual);
-  else if(["find","library","uveitis","starred","settings"].includes(s.view))show(s.view);
+  else if(["find","mine","library","uveitis","starred","settings"].includes(s.view))show(s.view);
   else show("find");
 }
 function renderPending(){
@@ -1007,8 +1103,9 @@ function renderPending(){
   renderList();
   if(gKey())modelOrder().then(fillModels).catch(()=>{});
   restoreState();
-  wideMQ.addEventListener("change",()=>{if(view==="detail")show("detail")});
-  addEventListener("resize",()=>{if(document.body.classList.contains("split"))setTopH()});
+  wideMQ.addEventListener("change",()=>{if(view==="detail")show("detail");else document.body.classList.toggle("msplit",wideMQ.matches&&view==="manual")});
+  addEventListener("resize",()=>{if(document.body.classList.contains("split")||document.body.classList.contains("msplit"))setTopH()});
+  syncNow();
   renderPending();
   if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();

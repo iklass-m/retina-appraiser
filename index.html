@@ -216,6 +216,7 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
 .cand button{text-align:left;border:1px dashed var(--rule);background:var(--sheet);border-radius:6px;padding:10px;min-height:44px;font:400 .84rem/1.4 var(--read);color:var(--ink)}
 .engine{display:flex;gap:6px;align-items:center;font-size:.78rem;color:var(--muted)}
 
+.mgrid{display:flex;flex-direction:column;gap:14px}
 /* tablet and desktop: larger type, wider page; with a paper open the list stays on the left (split view) */
 @media (min-width:700px){
   body{font-size:16px}
@@ -233,6 +234,11 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
   body.split .lvl{width:38px;height:38px}
   body.split .lvl b{font-size:1rem}
   .card.sel{border-color:var(--navy);box-shadow:inset 4px 0 0 var(--rust)}
+  /* appraise myself: the paper stays on the left while the checklist scrolls on the right */
+  body.msplit .wrap{max-width:90rem}
+  body.msplit .mgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}
+  body.msplit .mpaper{position:sticky;top:var(--toph,7.5rem);max-height:calc(100vh - var(--toph,7.5rem) - 14px);max-height:calc(100dvh - var(--toph,7.5rem) - 14px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+  body.msplit .mpaper .paper{max-height:none}
 }
 /* fingers, not a mouse */
 @media (pointer:coarse){
@@ -243,7 +249,7 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
   .linkbtn{padding:8px 0}
   .qa summary,.upload summary{padding:8px 0}
 }
-@media (max-width:520px){.twocol,.drops{grid-template-columns:1fr}.sheet{padding:18px 14px}.form{padding:16px 14px}.tabs button{font-size:.78rem;letter-spacing:.02em}.res .actions .btn{flex:1 1 auto}}
+@media (max-width:520px){.twocol,.drops{grid-template-columns:1fr}.sheet{padding:18px 14px}.form{padding:16px 14px}.tabs button{font-size:.75rem;letter-spacing:0}.res .actions .btn{flex:1 1 auto}}
 @media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
 </style>
 </head>
@@ -257,6 +263,7 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
     </div>
     <nav class="tabs" role="tablist">
       <button role="tab" id="t-find" aria-selected="true">Find</button>
+      <button role="tab" id="t-mine" aria-selected="false">Mine</button>
       <button role="tab" id="t-library" aria-selected="false">Retina</button>
       <button role="tab" id="t-uveitis" aria-selected="false">Uveitis</button>
       <button role="tab" id="t-starred" aria-selected="false">Starred</button>
@@ -370,6 +377,19 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
       <h2>Claude (with a subscription)</h2>
       <p class="guide">Every paper has a <b>Claude ↗</b> button. It opens your Claude version of this app at that paper, where <b>Appraise</b> uses your Claude subscription. Use Export / Import below to bring those appraisals back here.</p>
       <p class="guide"><a href="https://claude.ai/artifact/C9FtH4aSh5uGPQ7F2yF5UU" target="_blank" rel="noopener">Open the Claude version</a></p>
+    </div>
+    <div class="form">
+      <h2>Sync phone, tablet and PC</h2>
+      <p class="guide">Keeps your library, stars and unfinished appraisals the same on every device, through a file in <b>your own GitHub account</b>. Free. Set it up once on each device.</p>
+      <ol class="steps">
+        <li>Open <a href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Retina%20Appraiser%20sync" target="_blank" rel="noopener">GitHub: new token</a> and sign in.</li>
+        <li>Set <b>Expiration</b> to <b>No expiration</b>, leave only <b>gist</b> ticked, tap <b>Generate token</b> and copy it.</li>
+        <li>Paste it below and tap <b>Turn on sync</b>. Paste the same token on your other devices.</li>
+      </ol>
+      <div class="field"><label for="ghtoken">GitHub token</label><input type="password" id="ghtoken" autocomplete="off" placeholder="Paste your token (starts with ghp_)"></div>
+      <div class="actions"><button class="btn" type="button" id="syncon">Turn on sync</button><button class="btn ghost" type="button" id="syncnow">Sync now</button><button class="btn ghost" type="button" id="syncoff">Turn off here</button></div>
+      <div class="status" id="syncstatus" aria-live="polite"></div>
+      <p class="note">The token can only reach your gists, not your code. Treat it like a password and keep a copy somewhere safe for your other devices. The library is stored as a "secret" gist: not listed or searchable, but anyone given its link could read it, so keep to published papers and never patient details. Your Gemini key is not synced.</p>
     </div>
     <div class="form">
       <h2>Your library</h2>
