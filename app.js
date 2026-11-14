@@ -28,14 +28,22 @@ async function patch(id,data){const p=papers.find(x=>x.id===id);if(!p)return;Obj
 
 /* ---------- tabs ---------- */
 const isList=v=>v==="library"||v==="uveitis"||v==="starred";
+const wideMQ=matchMedia("(min-width:900px)");
+/* Tablet/desktop: with an appraisal open, the list it came from stays on the left. */
+function markOpen(){let sel=null;for(const c of $("#list").children){const on=c.dataset.id===openId&&view==="detail";c.classList.toggle("sel",on);if(on)sel=c}return sel}
+function setTopH(){document.documentElement.style.setProperty("--toph",($(".top").offsetHeight+14)+"px")}
 function show(v){
   view=v;
+  const split=wideMQ.matches&&v==="detail";
+  document.body.classList.toggle("split",split);
   for(const t of ["find","library","uveitis","starred"])$("#t-"+t).setAttribute("aria-selected",String(t===v||((v==="detail"||v==="manual")&&t===lastList)));
   $("#t-settings").setAttribute("aria-pressed",String(v==="settings"));
-  $("#v-find").hidden=v!=="find";$("#v-library").hidden=!isList(v);$("#v-detail").hidden=v!=="detail";$("#v-manual").hidden=v!=="manual";$("#v-settings").hidden=v!=="settings";
+  $("#v-find").hidden=!(v==="find"||(split&&lastList==="find"));$("#v-library").hidden=!(isList(v)||(split&&isList(lastList)));$("#v-detail").hidden=v!=="detail";$("#v-manual").hidden=v!=="manual";$("#v-settings").hidden=v!=="settings";
   $("#topic").hidden=v==="uveitis";
   if(isList(v)){lastList=v;renderList()}
   if(v==="find"){lastList="find";renderResults()}
+  if(split){setTopH();if(isList(lastList)&&!$("#list").children.length)renderList()}
+  const sel=markOpen();if(split&&sel)sel.scrollIntoView({block:"nearest"});
   window.scrollTo(0,0);
   saveState();
 }
@@ -57,15 +65,16 @@ renderChips();
 function levelSeal(p){const l=String(p.level||"?");return el("div",{class:"lvl l"+l,title:LEVELS[l]||"Evidence level"},el("b",{text:l}),el("i",{text:"level"}))}
 function verdictPill(p){return p.verdict?el("span",{class:"pill v-"+p.verdict,text:VERDICTS[p.verdict]||p.verdict}):null}
 function renderList(){
+  const lv=isList(view)?view:lastList;
   const list=$("#list");list.replaceChildren();
   const q=$("#q").value.trim().toLowerCase(),tp=$("#topic").value;
-  let rows=papers.filter(p=>view==="starred"?p.starred:view==="uveitis"?p.topic==="Uveitis":p.topic!=="Uveitis");
-  if(tp&&view!=="uveitis")rows=rows.filter(p=>p.topic===tp);
+  let rows=papers.filter(p=>lv==="starred"?p.starred:lv==="uveitis"?p.topic==="Uveitis":p.topic!=="Uveitis");
+  if(tp&&lv!=="uveitis")rows=rows.filter(p=>p.topic===tp);
   if(vfilter==="unread")rows=rows.filter(p=>!p.read);else if(vfilter)rows=rows.filter(p=>p.verdict===vfilter);
   if(q)rows=rows.filter(p=>JSON.stringify([p.title,p.journal,p.bottomLine,p.summary,p.intervention,p.topic,p.authors]).toLowerCase().includes(q));
   $("#count").textContent=`${rows.length} paper${rows.length===1?"":"s"}`;
-  if(!rows.length){list.append(el("div",{class:"empty"},el("h3",{text:view==="uveitis"?"No uveitis papers yet":view==="starred"?"No starred papers yet":papers.length?"Nothing matches":"Your library is empty"}),el("p",{text:view==="starred"?"Tap ☆ Star on any appraisal to keep it here.":papers.length&&(q||vfilter||tp)?"Clear the search or filters.":"Find a paper and tap AI appraise or Appraise myself."})));return}
-  for(const p of rows)list.append(el("div",{class:"card"+(p.read?"":" unread"),role:"button",tabindex:"0",onclick:()=>openPaper(p.id),onkeydown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openPaper(p.id)}}},levelSeal(p),el("div",{class:"body"},
+  if(!rows.length){list.append(el("div",{class:"empty"},el("h3",{text:lv==="uveitis"?"No uveitis papers yet":lv==="starred"?"No starred papers yet":papers.length?"Nothing matches":"Your library is empty"}),el("p",{text:lv==="starred"?"Tap ☆ Star on any appraisal to keep it here.":papers.length&&(q||vfilter||tp)?"Clear the search or filters.":"Find a paper and tap AI appraise or Appraise myself."})));return}
+  for(const p of rows)list.append(el("div",{class:"card"+(p.read?"":" unread")+(p.id===openId&&view==="detail"?" sel":""),"data-id":p.id,role:"button",tabindex:"0",onclick:()=>openPaper(p.id),onkeydown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openPaper(p.id)}}},levelSeal(p),el("div",{class:"body"},
     el("div",{class:"row"},p.topic?el("span",{class:"pill topic",text:p.topic}):null,verdictPill(p)),
     el("h3",{text:p.title||"Untitled"}),el("div",{class:"meta",text:[p.authors,p.journal,p.year].filter(Boolean).join(" · ")}),
     p.bottomLine?el("p",{class:"bl",text:p.bottomLine}):null),starButton(p,renderList)));
@@ -998,6 +1007,8 @@ function renderPending(){
   renderList();
   if(gKey())modelOrder().then(fillModels).catch(()=>{});
   restoreState();
+  wideMQ.addEventListener("change",()=>{if(view==="detail")show("detail")});
+  addEventListener("resize",()=>{if(document.body.classList.contains("split"))setTopH()});
   renderPending();
   if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();
